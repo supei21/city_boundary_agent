@@ -35,8 +35,7 @@ boundary_agent_demo/
 ├─ scripts/                 # 统一启动入口
 ├─ tests/                   # 自动化测试
 ├─ runtime/                 # 日志、结果和导出文件，不放源码
-├─ docs/                    # 项目说明与汇报材料
-└─ legacy/                  # 旧版 Streamlit 界面，仅供对照
+└─ docs/                    # 项目说明与汇报材料
 ```
 
 各目录的文件归属规则见 [docs/项目目录说明.md](docs/项目目录说明.md)。
@@ -113,12 +112,6 @@ npm run dev
 
 ```powershell
 E:\\miniconde\\envs\\langchain_env\\python.exe scripts\\run_cli.py
-```
-
-旧版 Streamlit 界面仅用于迁移对照：
-
-```powershell
-E:\\miniconde\\envs\\langchain_env\\python.exe -m streamlit run legacy\\streamlit_app.py
 ```
 
 ## 测试

@@ -6,9 +6,6 @@ PyYAML>=6.0
 fastapi>=0.115,<1.0
 uvicorn[standard]>=0.30
 python-multipart>=0.0.9
-streamlit>=1.40
-# Streamlit 1.61.0 is incompatible with Starlette 1.x GZipResponder.
-starlette==0.48.0
 pandas>=2.0
 pyshp>=2.3
 geopandas>=1.0,<2.0

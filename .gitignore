@@ -21,9 +21,6 @@ data/policies/*.pdf
 # 生成的报告成果
 outputs/
 
-# 旧实现，不继续维护
-legacy/
-
 # 汇报材料二进制文件（markdown 文档保留）
 docs/presentations/*.pptx
 docs/presentations/*.pdf
