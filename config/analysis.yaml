@@ -1,0 +1,58 @@
+project:
+  name: 城镇开发边界地块识别智能体Demo
+  version: demo-1.1.0
+
+workflow:
+  max_retries: 2
+  require_human_approval: true
+
+thresholds:
+  primary_inclusion: 80
+  secondary_inclusion: 65
+  exclusion: 40
+  minimum_completeness: 0.60
+  minimum_confidence: 0.60
+
+weights:
+  traffic: 0.25
+  terrain: 0.10
+  infrastructure: 0.20
+  urban_form: 0.10
+  industry: 0.25
+  population: 0.05
+  landuse: 0.05
+
+dynamic_adaptation:
+  # Di = alpha*Pi + beta*Si + gamma*Ri - delta*Ci
+  weights:
+    development_probability: 0.30
+    suitability: 0.40
+    planning_match: 0.30
+    constraint_penalty: 0.15
+  planning_neutral_score: 50
+  district_candidate_percentile: 0.20
+
+trained_model:
+  enabled: true
+  model_dir: "E:\\VscodeMyPrograma\\boundary_agent_demo\\models"
+  min_feature_coverage: 0.50
+  probability_field: development_probability
+  note: 读取训练工程中的 xgb_boundary.json 和 feature_names.json，作为智能体工具的开发变化概率输入。
+
+scales:
+  road_density_high: 8.0
+  transport_poi_high: 20
+  public_poi_high: 30
+  industry_poi_high: 35
+  commercial_poi_high: 25
+  population_density_high: 10000
+  relief_high: 50
+
+hard_constraints:
+  ecological_redline: true
+  permanent_farmland: true
+  prohibited_disaster_zone: true
+
+output:
+  language: zh-CN
+  save_audit_log: true

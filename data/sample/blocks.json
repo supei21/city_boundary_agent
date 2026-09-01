@@ -1,0 +1,62 @@
+{
+  "task": "识别城镇开发边界调整候选地块",
+  "blocks": [
+    {
+      "block_id": "WH2025_DEMO001",
+      "block_name": "边界外高适宜街区",
+      "inside_boundary": false,
+      "area_km2": 1.25,
+      "centroid_lon": 114.224366,
+      "centroid_lat": 30.087317,
+      "poi_density": 45.0,
+      "poi_industry": 34,
+      "poi_commercial": 23,
+      "poi_public": 28,
+      "poi_transport": 18,
+      "dem_mean": 28.4,
+      "dem_relief": 4.0,
+      "population": null,
+      "pop_density": null,
+      "road_density": 7.5,
+      "dominant_landuse": "待确认",
+      "disaster_risk": "低",
+      "ecological_redline": false,
+      "permanent_farmland": false,
+      "prohibited_disaster_zone": false
+    },
+    {
+      "block_id": "WH2025_DEMO002",
+      "block_name": "生态约束街区",
+      "inside_boundary": false,
+      "area_km2": 0.8,
+      "poi_density": 38.0,
+      "poi_industry": 25,
+      "poi_commercial": 15,
+      "poi_public": 18,
+      "poi_transport": 12,
+      "dem_relief": 8.0,
+      "road_density": 6.0,
+      "disaster_risk": "低",
+      "ecological_redline": true,
+      "permanent_farmland": false,
+      "prohibited_disaster_zone": false
+    },
+    {
+      "block_id": "WH2025_DEMO003",
+      "block_name": "边界内高风险低适宜街区",
+      "inside_boundary": true,
+      "area_km2": 3.2,
+      "poi_density": 2.0,
+      "poi_industry": 1,
+      "poi_commercial": 1,
+      "poi_public": 2,
+      "poi_transport": 1,
+      "dem_relief": 45.0,
+      "road_density": 0.8,
+      "disaster_risk": "高",
+      "ecological_redline": false,
+      "permanent_farmland": false,
+      "prohibited_disaster_zone": false
+    }
+  ]
+}

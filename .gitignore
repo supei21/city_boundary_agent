@@ -1,0 +1,40 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+
+frontend/node_modules/
+frontend/.npm-cache/
+frontend/dist/
+frontend/*.tsbuildinfo
+frontend/vite.config.js
+frontend/vite.config.d.ts
+
+config/model_local.py
+.env
+.venv/
+
+# 大文件数据：业务输入与政策参考PDF不入库（可自行放置到本地对应目录）
+data/input/
+data/policies/*.pdf
+
+# 生成的报告成果
+outputs/
+
+# 旧实现，不继续维护
+legacy/
+
+# 汇报材料二进制文件（markdown 文档保留）
+docs/presentations/*.pptx
+docs/presentations/*.pdf
+
+runtime/logs/*
+runtime/results/*
+runtime/exports/*
+runtime/uploads/*
+runtime/user_models.json
+runtime/user_models.json.tmp
+!runtime/logs/.gitkeep
+!runtime/results/.gitkeep
+!runtime/exports/.gitkeep
+!runtime/uploads/.gitkeep
