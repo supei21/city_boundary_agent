@@ -19,6 +19,9 @@ from backend.schemas import (
     ChatRequest,
     CreateUserModelResponse,
     DatasetPayload,
+    RagPolicyDocumentDetail,
+    RagPolicyDocumentSummary,
+    RagPolicySearchResult,
     ReportGenerateRequest,
     UserModelInput,
     UserModelOutput,
@@ -36,6 +39,9 @@ from boundary_agent.llm.user_models import (
     add_user_model,
     delete_user_model,
 )
+from boundary_agent.config import load_config
+from boundary_agent.rag.config import settings_from_config as rag_settings_from_config
+from boundary_agent.rag.library import get_policy_document, list_policy_library, search_policy_library
 from boundary_agent.spatial import read_shapefile_zip_path
 
 
@@ -212,6 +218,30 @@ def preview_policy_reference_pdf() -> FileResponse:
         filename=POLICY_REFERENCE_PDF.name,
         content_disposition_type="inline",
     )
+
+
+@app.get("/api/rag/policies", response_model=list[RagPolicyDocumentSummary])
+def list_rag_policy_documents() -> list[RagPolicyDocumentSummary]:
+    settings = rag_settings_from_config(load_config())
+    return [RagPolicyDocumentSummary(**item) for item in list_policy_library(settings)]
+
+
+@app.get("/api/rag/policies/{document_id}", response_model=RagPolicyDocumentDetail)
+def get_rag_policy_document(document_id: str) -> RagPolicyDocumentDetail:
+    settings = rag_settings_from_config(load_config())
+    document = get_policy_document(settings, document_id)
+    if document is None:
+        raise HTTPException(status_code=404, detail="RAG政策文档不存在")
+    return RagPolicyDocumentDetail(**document)
+
+
+@app.get("/api/rag/search", response_model=list[RagPolicySearchResult])
+def search_rag_policies(
+    q: str = Query(min_length=1, max_length=200),
+    limit: int = Query(default=8, ge=1, le=30),
+) -> list[RagPolicySearchResult]:
+    settings = rag_settings_from_config(load_config())
+    return [RagPolicySearchResult(**item) for item in search_policy_library(settings, q, limit)]
 
 
 @app.get("/api/artifacts", response_model=list[ArtifactSummary])

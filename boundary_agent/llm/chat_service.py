@@ -7,8 +7,9 @@ from typing import Any
 
 from boundary_agent.agent.events import EventCallback, emit
 from boundary_agent.config import load_config
-from boundary_agent.agent import run_tool_agent
+from boundary_agent.agent.react_agent import run_tool_agent
 from boundary_agent.llm.client import build_chat_model, model_is_ready
+from boundary_agent.llm.policy_response import format_policy_answer, is_policy_query
 from boundary_agent.models import BlockDecision, ChatIntent, ChatTurnResult
 from boundary_agent.workflow.graph import run_workflow
 
@@ -188,11 +189,12 @@ def _fallback_answer(query: str, intent: ChatIntent, decisions: list[dict], tota
         )
     for item in decisions[:10]:
         reasons = "；".join(item.get("key_reasons", [])[:2]) or "有效证据不足"
+        policy = item.get("policy_compliance") or "未判读"
         lines.append(
             f"- **{item['block_id']}（{item.get('block_name') or '未命名'}）**："
             f"{item['decision']}，动态适配度 {item.get('dynamic_score', 0):.1f}，"
             f"适宜性 {item['overall_suitability']:.1f}，"
-            f"置信度 {item['confidence']:.2f}。依据：{reasons}。"
+            f"置信度 {item['confidence']:.2f}，政策合规性：{policy}。依据：{reasons}。"
         )
     if len(decisions) > 10:
         lines.append(f"另外 {len(decisions) - 10} 个结果请查看下方结果表。")
@@ -222,12 +224,18 @@ def _llm_answer(query: str, intent: ChatIntent, decisions: list[dict], total_sel
             "risks": item["risks"],
             "missing_information": item["missing_information"],
             "recommendation": item["recommendation"],
+            "policy_compliance": item.get("policy_compliance"),
+            "policy_reason": item.get("policy_reason"),
+            "policy_requirements": item.get("policy_requirements"),
+            "policy_matched_rules": item.get("policy_matched_rules"),
+            "policy_sources": item.get("policy_sources"),
         }
         for item in decisions[:30]
     ]
     prompt = f"""你是城镇开发边界规划分析助手。请根据规则引擎的结构化结果回答用户。
-不得修改decision、分数、约束和置信度，不得编造数据，不得把Demo结论称为正式规划结论。
-先直接回答，再简要说明主要依据、风险和缺失信息。若结果为空，要明确没有符合条件的街区。
+不得修改decision、分数、约束、政策合规性和置信度，不得编造数据，不得把Demo结论称为正式规划结论。
+必须区分模型候选等级与政策合规结论；policy_compliance为“依据不足”时不得表述为符合政策。
+先直接回答，再简要说明政策依据、主要驱动因素、风险和缺失信息。若结果为空，要明确没有符合条件的街区。
 
 用户问题：{query}
 解析意图：{intent.model_dump_json()}
@@ -342,7 +350,9 @@ def _handle_chat_fixed_flow(
     )
 
     used_model = intent.parser == "llm"
-    if model_is_ready(settings):
+    if is_policy_query(query):
+        response = format_policy_answer(query, decisions, len(selected))
+    elif model_is_ready(settings):
         try:
             response = _llm_answer(query, intent, decisions, len(selected), settings)
             used_model = True

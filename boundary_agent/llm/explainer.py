@@ -18,8 +18,10 @@ def explain_with_llm(decision: dict, model_config: dict | None = None) -> str | 
     try:
         model = build_chat_model(settings)
         prompt = (
-            "你是规划决策解释助手。只能解释给定JSON，不能修改decision、评分、约束和置信度，"
-            "不能补充JSON中不存在的事实。请用120字以内中文说明，明确这是辅助建议而非正式规划结论。\nJSON："
+            "你是城镇开发边界规划决策解释助手。只能基于给定JSON解释，不能修改decision、评分、约束、"
+            "政策规则命中和置信度，不能补充JSON中不存在的事实。若JSON含policy_sources或policy_matched_rules，"
+            "请优先引用这些政策依据说明拟调入地块是否符合规定；若依据不足，请明确需要人工复核。"
+            "请用180字以内中文说明，明确这是辅助建议而非正式规划审批结论。\nJSON："
             + str(decision)
         )
         return model.invoke(prompt).content

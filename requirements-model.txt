@@ -1,0 +1,5 @@
+xgboost==2.0.3
+dbfread>=2.0.7
+numpy>=1.26
+pandas>=2.0
+scikit-learn>=1.4

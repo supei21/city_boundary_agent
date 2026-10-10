@@ -27,6 +27,7 @@ from boundary_agent.config import load_config
 from boundary_agent.tools.trained_model import model_status, resolve_model_dir
 from boundary_agent.spatial import (
     SpatialDataset,
+    apply_constraint_layers,
     build_analysis_geojson,
     export_candidate_shapefile,
 )
@@ -186,6 +187,17 @@ class DemoWorkspace:
         with self._lock:
             self._clear_spatial_input()
             self._artifacts.clear()
+            if self.constraint_path is not None:
+                applied = apply_constraint_layers(dataset, self.constraint_path)
+                if applied:
+                    self.constraint_dataset.warnings = [
+                        warning
+                        for warning in self.constraint_dataset.warnings
+                        if not warning.startswith("已完成空间叠加")
+                    ]
+                    self.constraint_dataset.warnings.append(
+                        f"已完成空间叠加：{sum(applied.values())} 次约束命中。"
+                    )
             self.spatial_dataset = dataset
             self.uploaded_path = source_path
             self.dataset_name = dataset.name
@@ -207,6 +219,15 @@ class DemoWorkspace:
             self._clear_constraint_input()
             self.constraint_path = source_path
             self.constraint_dataset = _inspect_constraint_dataset(name, source_path)
+            if self.spatial_dataset is not None:
+                applied = apply_constraint_layers(self.spatial_dataset, source_path)
+                self.blocks = self.spatial_dataset.blocks
+                if applied:
+                    self.constraint_dataset.warnings.append(
+                        f"已完成空间叠加：{sum(applied.values())} 次约束命中。"
+                    )
+                else:
+                    self.constraint_dataset.warnings.append("未找到可用于空间叠加的标准三线图层。")
             return self.constraint_dataset
 
     def add_policy_document(self, name: str, source_path: Path, size: int) -> PolicyDocumentSummary:
@@ -266,6 +287,24 @@ class DemoWorkspace:
                 )
                 if exported is not None:
                     name, spatial_content = exported
+                    spatial_path = spatial_content if isinstance(spatial_content, Path) else None
+                    self._add_artifact(
+                        name,
+                        "spatial",
+                        "application/zip",
+                        preview,
+                        content=spatial_content if isinstance(spatial_content, bytes) else None,
+                        file_path=spatial_path,
+                    )
+                inclusion_exported = export_candidate_shapefile(
+                    self.spatial_dataset,
+                    payload.get("decisions", []),
+                    EXPORTS_DIR / f"candidate_inclusion_blocks_{timestamp}.shp.zip",
+                    decision_types={"一级优先调入", "二级优先调入"},
+                    output_name="candidate_inclusion_blocks",
+                )
+                if inclusion_exported is not None:
+                    name, spatial_content = inclusion_exported
                     spatial_path = spatial_content if isinstance(spatial_content, Path) else None
                     self._add_artifact(
                         name,

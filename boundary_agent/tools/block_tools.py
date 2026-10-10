@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import Literal
+from typing import Any, Literal
 
 from langchain_core.tools import tool
 
@@ -24,6 +24,7 @@ def build_block_tools(
     blocks: list[dict],
     config: dict,
     event_callback: EventCallback | None = None,
+    result_context: dict[str, Any] | None = None,
 ) -> list:
     """为当前已加载的数据构造工具；所有操作都只读。"""
     block_index = {str(item.get("block_id")): item for item in blocks}
@@ -97,6 +98,7 @@ def build_block_tools(
                 "model_dir": bundle.model_dir,
                 "feature_count": bundle.feature_count,
                 "missing_features": bundle.missing_features,
+                "source": bundle.source,
             },
         })
 
@@ -119,6 +121,9 @@ def build_block_tools(
             include_ai_explanations=False,
             event_callback=event_callback,
         )
+        if result_context is not None:
+            result_context["workflow"] = result
+            result_context["target"] = "指定地块"
         return _dump({
             "tool": "analyze_blocks",
             "selected_block_ids": [str(item["block_id"]) for item in selected],
@@ -139,6 +144,9 @@ def build_block_tools(
             include_ai_explanations=False,
             event_callback=event_callback,
         )
+        if result_context is not None:
+            result_context["workflow"] = result
+            result_context["target"] = target
         decisions = list(result["decisions"])
         if target == "调入":
             decisions = [item for item in decisions if item["decision"] in {"一级优先调入", "二级优先调入"}]

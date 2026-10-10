@@ -40,7 +40,11 @@ class BlockInput(BaseModel):
     farmland_ratio: float | None = Field(default=None, ge=0, le=1)
     ecological_ratio: float | None = Field(default=None, ge=0, le=1)
     planning_match: float | None = Field(default=None, ge=0, le=100)
+    development_potential: float | None = Field(default=None, ge=0, le=1)
     development_probability: float | None = Field(default=None, ge=0, le=100)
+    sec_prob: float | None = Field(default=None, ge=0, le=1)
+    ter_prob: float | None = Field(default=None, ge=0, le=1)
+    tra_prob: float | None = Field(default=None, ge=0, le=1)
     data_status: str | None = None
     disaster_risk: Literal["低", "中", "高", "禁止建设", "low", "medium", "high", "prohibited"] | None = None
     ecological_redline: bool | None = None
@@ -83,6 +87,15 @@ class ConstraintResult(BaseModel):
     risk_level: str
     missing_constraints: list[str]
     manual_review_required: bool
+    policy_rag_enabled: bool = False
+    policy_rag_available: bool = False
+    policy_matched_rules: list[dict[str, Any]] = Field(default_factory=list)
+    policy_sources: list[dict[str, Any]] = Field(default_factory=list)
+    policy_assessment: str | None = None
+    policy_compliance: Literal["符合", "有条件符合", "不符合", "依据不足"] | None = None
+    policy_reason: str | None = None
+    policy_requirements: list[str] = Field(default_factory=list)
+    policy_warning: str | None = None
 
 
 class AdaptationResult(BaseModel):
@@ -107,6 +120,7 @@ class BlockDecision(BaseModel):
     block_id: str
     block_name: str | None = None
     inside_boundary: bool
+    boundary_overlap_ratio: float = Field(default=0, ge=0, le=1)
     decision: DecisionType
     overall_suitability: float
     development_probability: float = Field(default=0, ge=0, le=100)
@@ -122,6 +136,12 @@ class BlockDecision(BaseModel):
     recommendation: str
     recommended_use: str = "待规划论证"
     key_drivers: list[str] = Field(default_factory=list)
+    policy_matched_rules: list[dict[str, Any]] = Field(default_factory=list)
+    policy_sources: list[dict[str, Any]] = Field(default_factory=list)
+    policy_assessment: str | None = None
+    policy_compliance: Literal["符合", "有条件符合", "不符合", "依据不足"] | None = None
+    policy_reason: str | None = None
+    policy_requirements: list[str] = Field(default_factory=list)
     rank_city: int | None = Field(default=None, ge=1)
     rank_district: int | None = Field(default=None, ge=1)
     rule_version: str

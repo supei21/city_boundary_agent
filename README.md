@@ -14,6 +14,7 @@
 - 候选调整地块可导出为带分析字段的 SHP ZIP。
 - 将外部训练工程 `E:\VscodeMyPrograma\boundary_agent_demo\models` 中的 XGBoost 模型封装为智能体工具。
 - 计算模型开发概率、空间适宜性、规划匹配度、约束成本和动态适配指数，并提供全市与区内排名。
+- 已在智能体内部接入政策 RAG：地块约束评价会同步返回政策规则命中、政策来源和拟调入合规性提示。
 - 地图支持按一级调入、二级调入、调出、内部更新和人工复核筛选。
 - 支持查看、分析、比较和筛选候选街区。
 - 支持在对话输入框中切换已配置的大模型或本地规则模式。
@@ -26,6 +27,7 @@
 boundary_agent_demo/
 ├─ backend/                 # FastAPI 接口与流式响应
 ├─ boundary_agent/          # 智能体、工具、规则和领域模型
+│  └─ rag/                  # 项目内政策RAG，和工作流/大模型客户端解耦
 ├─ frontend/                # React + TypeScript 用户界面
 ├─ config/                  # 分析规则与模型配置
 ├─ data/
@@ -57,6 +59,7 @@ cd ..
 - `config/analysis.yaml` 中的 `trained_model.model_dir`：训练模型目录，默认读取 `xgb_boundary.json`、`feature_names.json` 和 `metrics.json`。
 - `config/model_example.py`：可提交到版本库的模型配置示例。
 - `config/model_local.py`：本机模型密钥与地址，已由 `.gitignore` 排除。
+- `config/analysis.yaml` 中的 `policy_rag`：政策库、规则文件、索引文件和检索条数配置。
 
 首次配置模型时，可参考 `config/model_example.py` 创建 `config/model_local.py`。不要把真实 API Key 写入 README、示例文件或版本库。
 
@@ -69,6 +72,17 @@ trained_model:
 ```
 
 在对话中询问“哪些地块更可能调入”“用模型给候选地块排序”时，智能体会先调用 `score_blocks_with_trained_model` 或在 `analyze_blocks`、`identify_candidate_blocks` 中自动补充 `development_probability`，再进入动态适配综合判断。
+
+政策 RAG 默认启用，代码位于 `boundary_agent/rag/`，不依赖 Streamlit 或外部 RAG CLI。默认读取项目外层资料中的政策库，索引写入智能体项目自己的 `runtime/policy_rag/policy_index.json`：
+
+```yaml
+policy_rag:
+  enabled: true
+  policy_dir: "../../rag1.0/rag1.0/城镇边界政策库"
+  rules_path: "../../rag1.0/rag1.0/城镇边界政策库/policy_rules.json"
+  index_path: "runtime/policy_rag/policy_index.json"
+  retrieval_k: 6
+```
 
 需要在界面中增加多个模型时，在 `config/model_local.py` 中配置 `MODEL_PROFILES`。每个档案会继承 `MODEL_CONFIG` 中未覆盖的连接参数：
 
@@ -130,6 +144,9 @@ npm run build
 - 当前空间 Demo 接受 Polygon 或 MultiPolygon 地块，并统一转换为 EPSG:4326 用于网页预览。
 - SHP ZIP 使用分块写盘上传，默认上限为 1024MB；地图默认显示候选优先的 8000 个地块，并仅对网页预览采用约2米的拓扑保持简化，完整原始数据仍参与分析和导出。
 - JSON/CSV 中 `block_id` 和 `inside_boundary` 为必填字段；SHP缺少 `block_id` 时会依据几何生成稳定编号，缺少边界标识时暂按边界外处理并给出警告。
+- SHP包含 `dev_score`（0到1）时，智能体将其作为二产、三产和交通模型的综合发展潜力，不再用旧XGBoost覆盖；仅在开发边界外按前5%和前20%划分一级、二级调入热点，开发边界内 `dev_score < 0.40` 的地块进入调出候选。
+- 上传三线约束数据后，系统会把城镇开发边界、生态保护红线和永久基本农田与候选地块做空间叠加；调入地块必须位于开发边界外，调出地块必须位于开发边界内。
+- 完成候选分析后，成果区会额外生成 `candidate_inclusion_blocks_*.shp.zip`，其中只包含一级、二级调入地块。
 - 缺失指标不会自动填 0；关键约束缺失时会标记人工复核。
 
 可通过环境变量调整大文件参数：
@@ -149,7 +166,7 @@ E:\miniconde\envs\langchain_env\python.exe scripts\run_demo.py
 ## 下一阶段
 
 - 将训练工程的 SHAP 解释按地块封装为第二个工具，输出每个候选地块的主要正向/负向驱动因素。
-- 接入规划文本知识库与RAG，将默认规划匹配度替换为可追溯的政策需求匹配结果。
+- 将政策 RAG 的检索结果进一步用于规划匹配度评分，形成可追溯的政策需求匹配结果。
 - 叠加生态红线、永久基本农田和灾害风险等空间约束。
 - 生成调入调出 GeoJSON、GeoPackage 或 SHP ZIP。
 - 按多步骤任务流程生成地图和 PDF 分析报告。

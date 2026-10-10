@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from boundary_agent.models import BlockInput, ConstraintResult, SuitabilityResult
+from boundary_agent.rag.policy_client import PolicyAssessment, assess_block_with_rag
 
 
 DIMENSION_LABELS = {
@@ -87,7 +88,11 @@ def calculate_suitability(block: BlockInput, config: dict) -> SuitabilityResult:
     )
 
 
-def check_constraints(block: BlockInput, config: dict) -> ConstraintResult:
+def check_constraints(
+    block: BlockInput,
+    config: dict,
+    policy_assessment: PolicyAssessment | None = None,
+) -> ConstraintResult:
     flags: list[str] = []
     missing: list[str] = []
     if block.ecological_redline is True:
@@ -110,11 +115,49 @@ def check_constraints(block: BlockInput, config: dict) -> ConstraintResult:
         risk = "中"
     else:
         risk = "低"
+    policy = policy_assessment or assess_block_with_rag(block, config)
+    policy_rules = policy.rules.get("matched_rules", []) if policy.rules else []
+    policy_sources = policy.retrieval.get("sources", []) if policy.retrieval else []
+    policy_assessment = policy.rules.get("suggested_action") if policy.rules else None
+    policy_compliance = policy.verdict.get("status") if policy.verdict else None
+    policy_reason = policy.verdict.get("reason") if policy.verdict else None
+    policy_requirements = list(policy.verdict.get("requirements") or []) if policy.verdict else []
+    blocking_rule_ids = set(policy.verdict.get("blocking_rule_ids") or []) if policy.verdict else set()
+    policy_forbidden = [
+        rule for rule in policy_rules
+        if str(rule.get("rule_id")) in blocking_rule_ids
+    ]
+    for rule in policy_forbidden[:3]:
+        label = f"政策规则{rule.get('rule_id')}：{rule.get('action')}"
+        if label not in flags:
+            flags.append(label)
+    if policy.enabled and not policy.available and policy.warning:
+        missing.append("政策RAG依据")
+    hard = hard or bool(policy_forbidden)
+    if policy_compliance == "不符合":
+        hard = True
+        if "政策判读结论：不符合" not in flags:
+            flags.append("政策判读结论：不符合")
+    if policy_forbidden:
+        risk = "高"
     return ConstraintResult(
         block_id=block.block_id,
         hard_constraint=hard,
         constraint_flags=flags,
         risk_level=risk,
         missing_constraints=missing,
-        manual_review_required=hard or bool(missing),
+        manual_review_required=(
+            hard
+            or bool(missing)
+            or policy_compliance in {"有条件符合", "依据不足"}
+        ),
+        policy_rag_enabled=policy.enabled,
+        policy_rag_available=policy.available,
+        policy_matched_rules=policy_rules[:5],
+        policy_sources=policy_sources[:6],
+        policy_assessment=policy_assessment,
+        policy_compliance=policy_compliance,
+        policy_reason=policy_reason,
+        policy_requirements=policy_requirements,
+        policy_warning=policy.warning,
     )

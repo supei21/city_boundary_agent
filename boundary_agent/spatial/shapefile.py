@@ -13,7 +13,7 @@ from typing import Any
 import geopandas as gpd
 import pandas as pd
 from shapely.geometry import GeometryCollection, MultiPolygon, Polygon
-from shapely.ops import unary_union
+from shapely.ops import polygonize, unary_union
 
 from boundary_agent.gis import SHP_FIELD_ALIASES, TEXT_ATTRIBUTE_FIELDS
 from boundary_agent.io import BOOL_FALSE, BOOL_TRUE, coerce
@@ -53,7 +53,21 @@ SHP_EXPORT_FIELDS = {
     "ecological_ratio": "eco_ratio",
     "industrial_ratio": "industrial",
     "residential_ratio": "residentia",
+    "development_potential": "dev_score",
 }
+
+CONSTRAINT_LAYER_KINDS = {
+    "urban_development_boundary": "urban_boundary",
+    "ecological_redline": "ecological_redline",
+    "farmland_permanent_basic_farmland": "permanent_farmland",
+}
+
+
+def _dbf_text(value: Any, max_bytes: int) -> str:
+    encoded = str(value or "").encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return encoded.decode("utf-8")
+    return encoded[:max_bytes].decode("utf-8", errors="ignore")
 
 
 @dataclass(slots=True)
@@ -216,6 +230,118 @@ def _blocks_from_frame(frame: gpd.GeoDataFrame) -> list[dict[str, Any]]:
     ]
 
 
+def _constraint_kind(path: Path) -> str | None:
+    stem = path.stem.lower().replace("-", "_").replace(" ", "_")
+    if stem in CONSTRAINT_LAYER_KINDS:
+        return CONSTRAINT_LAYER_KINDS[stem]
+    if "development" in stem and "boundary" in stem:
+        return "urban_boundary"
+    if "ecological" in stem and "redline" in stem:
+        return "ecological_redline"
+    if "farmland" in stem and ("permanent" in stem or "basic" in stem):
+        return "permanent_farmland"
+    return None
+
+
+def _overlap_ratio(geometry: gpd.GeoSeries, constraint_geometry: Any) -> pd.Series:
+    denominator = geometry.area.replace(0, pd.NA)
+    ratio = geometry.intersection(constraint_geometry).area / denominator
+    return pd.to_numeric(ratio, errors="coerce").fillna(0.0).clip(0.0, 1.0)
+
+
+def _polygonal_union(geometries: list[Any]) -> Polygon | MultiPolygon | None:
+    merged = unary_union(geometries)
+    polygonal = _polygonal_geometry(merged)
+    if polygonal is not None:
+        return polygonal
+    polygons = list(polygonize(merged))
+    if not polygons:
+        return None
+    polygonal = unary_union(polygons)
+    return polygonal if isinstance(polygonal, (Polygon, MultiPolygon)) else None
+
+
+def _has_existing_true(frame: gpd.GeoDataFrame, field: str) -> bool:
+    if field not in frame.columns:
+        return False
+    return bool(frame[field].map(_boolish).fillna(False).astype(bool).any())
+
+
+def apply_constraint_layers(dataset: SpatialDataset, source_path: Path) -> dict[str, int]:
+    """Overlay uploaded three-line constraints onto the current parcel dataset."""
+    temp_dir = tempfile.TemporaryDirectory()
+    root = Path(temp_dir.name)
+    try:
+        if source_path.suffix.lower() == ".zip":
+            with zipfile.ZipFile(source_path) as archive:
+                _safe_extract(archive, root)
+            spatial_paths = sorted(root.rglob("*.shp"))
+        elif source_path.suffix.lower() in {".json", ".geojson"}:
+            spatial_paths = [source_path]
+        else:
+            return {}
+
+        grouped: dict[str, list[Any]] = {}
+        for path in spatial_paths:
+            kind = _constraint_kind(path)
+            if kind is None:
+                continue
+            layer = gpd.read_file(path, engine="pyogrio")
+            if layer.empty or layer.crs is None:
+                continue
+            if layer.crs != dataset.original.crs:
+                layer = layer.to_crs(dataset.original.crs)
+            layer = layer[layer.geometry.notna() & ~layer.geometry.is_empty].copy()
+            if layer.empty:
+                continue
+            if (~layer.geometry.is_valid).any():
+                layer.geometry = layer.geometry.make_valid()
+            grouped.setdefault(kind, []).extend(layer.geometry.tolist())
+
+        if not grouped:
+            return {}
+
+        frame = dataset.original.copy()
+        applied: dict[str, int] = {}
+        boundary_geometries = grouped.get("urban_boundary")
+        if boundary_geometries:
+            boundary = _polygonal_union(boundary_geometries)
+            if boundary is not None:
+                ratios = _overlap_ratio(frame.geometry, boundary)
+                if bool(ratios.gt(0).any()) or not _has_existing_true(frame, "inside_boundary"):
+                    frame["boundary_overlap_ratio"] = ratios
+                    frame["inside_boundary"] = ratios.ge(0.5)
+                    applied["urban_boundary"] = int(frame["inside_boundary"].sum())
+
+        ecological_geometries = grouped.get("ecological_redline")
+        if ecological_geometries:
+            ecological = _polygonal_union(ecological_geometries)
+            if ecological is not None:
+                ratios = _overlap_ratio(frame.geometry, ecological)
+                if bool(ratios.gt(0).any()) or not _has_existing_true(frame, "ecological_redline"):
+                    frame["ecological_ratio"] = ratios
+                    frame["ecological_redline"] = ratios.gt(0)
+                    applied["ecological_redline"] = int(frame["ecological_redline"].sum())
+
+        farmland_geometries = grouped.get("permanent_farmland")
+        if farmland_geometries:
+            farmland = _polygonal_union(farmland_geometries)
+            if farmland is not None:
+                ratios = _overlap_ratio(frame.geometry, farmland)
+                if bool(ratios.gt(0).any()) or not _has_existing_true(frame, "permanent_farmland"):
+                    frame["farmland_ratio"] = ratios
+                    frame["permanent_farmland"] = ratios.gt(0)
+                    applied["permanent_farmland"] = int(frame["permanent_farmland"].sum())
+
+        dataset.original = frame
+        dataset.blocks = _blocks_from_frame(frame)
+        dataset.warnings = _dataset_warnings(frame, set(frame.columns))
+        dataset.warnings.append("已将城镇开发边界、生态保护红线和永久基本农田图层叠加到候选地块。")
+        return applied
+    finally:
+        temp_dir.cleanup()
+
+
 def _read_shapefile_archive(name: str, archive_source: Any) -> SpatialDataset:
     temp_dir = tempfile.TemporaryDirectory()
     root = Path(temp_dir.name)
@@ -332,6 +458,9 @@ def build_analysis_geojson(
                     "ai_recommended_use": decision.get("recommended_use"),
                     "ai_key_drivers": "；".join(decision.get("key_drivers") or []),
                     "ai_constraint_status": decision.get("constraint_status"),
+                    "ai_policy_compliance": decision.get("policy_compliance"),
+                    "ai_policy_reason": decision.get("policy_reason"),
+                    "ai_policy_requirements": "；".join(decision.get("policy_requirements") or []),
                     "ai_rank_city": decision.get("rank_city"),
                     "ai_rank_district": decision.get("rank_district"),
                     "ai_recommendation": decision.get("recommendation"),
@@ -350,12 +479,15 @@ def export_candidate_shapefile(
     dataset: SpatialDataset,
     decisions: list[dict[str, Any]],
     output_zip: Path | None = None,
+    decision_types: set[str] | None = None,
+    output_name: str = "candidate_adjustment_blocks",
 ) -> tuple[str, bytes | Path] | None:
+    allowed_decisions = ADJUSTMENT_DECISIONS if decision_types is None else decision_types
     decision_map = {
         str(item.get("block_id")): item
         for item in decisions
         if item.get("block_id") is not None
-        and item.get("decision") in ADJUSTMENT_DECISIONS
+        and item.get("decision") in allowed_decisions
     }
     if not decision_map:
         return None
@@ -396,13 +528,28 @@ def export_candidate_shapefile(
         lambda value: decision_map[str(value)].get("rank_district")
     )
     subset["AI_USE"] = subset["block_id"].map(
-        lambda value: str(decision_map[str(value)].get("recommended_use") or "")[:80]
+        lambda value: _dbf_text(decision_map[str(value)].get("recommended_use"), 80)
     )
     subset["AI_DRIVER"] = subset["block_id"].map(
-        lambda value: "；".join(decision_map[str(value)].get("key_drivers") or [])[:250]
+        lambda value: _dbf_text(
+            "；".join(decision_map[str(value)].get("key_drivers") or []),
+            250,
+        )
     )
     subset["AI_NOTE"] = subset["block_id"].map(
-        lambda value: str(decision_map[str(value)].get("recommendation") or "")[:250]
+        lambda value: _dbf_text(decision_map[str(value)].get("recommendation"), 250)
+    )
+    subset["AI_POLICY"] = subset["block_id"].map(
+        lambda value: str(decision_map[str(value)].get("policy_compliance") or "未判读")[:20]
+    )
+    subset["AI_PREAS"] = subset["block_id"].map(
+        lambda value: _dbf_text(decision_map[str(value)].get("policy_reason"), 250)
+    )
+    subset["AI_PREQ"] = subset["block_id"].map(
+        lambda value: _dbf_text(
+            "；".join(decision_map[str(value)].get("policy_requirements") or []),
+            250,
+        )
     )
     subset = subset.rename(
         columns={
@@ -414,7 +561,6 @@ def export_candidate_shapefile(
 
     with tempfile.TemporaryDirectory() as output_root:
         output_dir = Path(output_root)
-        output_name = "candidate_adjustment_blocks"
         output_path = output_dir / f"{output_name}.shp"
         subset.to_file(
             output_path,

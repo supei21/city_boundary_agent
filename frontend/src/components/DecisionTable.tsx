@@ -22,6 +22,7 @@ export function DecisionTable({ decisions }: { decisions: Decision[] }) {
           <tr>
             <th>街区</th>
             <th>判断</th>
+            <th>政策合规</th>
             <th>动态适配</th>
             <th>推荐用途</th>
             <th>排名</th>
@@ -36,6 +37,7 @@ export function DecisionTable({ decisions }: { decisions: Decision[] }) {
                 <small>{item.block_name ?? "未命名"}</small>
               </td>
               <td><span className="decision-tag">{item.decision}</span></td>
+              <td title={item.policy_reason ?? undefined}>{item.policy_compliance ?? "未判读"}</td>
               <td>{item.dynamic_score.toFixed(1)}</td>
               <td>{item.recommended_use}</td>
               <td>{item.rank_city ? `全市 ${item.rank_city}` : "—"}</td>

@@ -3,6 +3,9 @@ import type {
   ArtifactSummary,
   CreateUserModelResponse,
   DatasetPayload,
+  RagPolicyDocumentDetail,
+  RagPolicyDocumentSummary,
+  RagPolicySearchResult,
   StreamPacket,
   UserModelInput,
   WorkspaceSummary,
@@ -66,6 +69,18 @@ export function artifactDownloadUrl(id: string): string {
 
 export function policyReferencePdfUrl(): string {
   return `${API_ROOT}/policies/reference-pdf/preview`;
+}
+
+export function listRagPolicies(): Promise<RagPolicyDocumentSummary[]> {
+  return request("/rag/policies");
+}
+
+export function getRagPolicyDocument(id: string): Promise<RagPolicyDocumentDetail> {
+  return request(`/rag/policies/${encodeURIComponent(id)}`);
+}
+
+export function searchRagPolicies(query: string, limit = 8): Promise<RagPolicySearchResult[]> {
+  return request(`/rag/search?q=${encodeURIComponent(query)}&limit=${limit}`);
 }
 
 export function createUserModel(input: UserModelInput): Promise<CreateUserModelResponse> {

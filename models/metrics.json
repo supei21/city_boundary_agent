@@ -1,0 +1,79 @@
+{
+  "train_roc_auc": 0.9896354226222184,
+  "test_roc_auc": 0.9812802638984081,
+  "test_pr_auc_average_precision": 0.9408803767892051,
+  "test_brier_score": 0.046734792174885874,
+  "test_precision": 0.8287671232876712,
+  "test_recall": 0.989100817438692,
+  "test_f1": 0.901863354037267,
+  "test_confusion_matrix": [
+    [
+      903,
+      75
+    ],
+    [
+      4,
+      363
+    ]
+  ],
+  "random_holdout": {
+    "roc_auc": 0.9812802638984081,
+    "pr_auc_average_precision": 0.9408803767892051,
+    "brier_score": 0.046734792174885874,
+    "precision": 0.8287671232876712,
+    "recall": 0.989100817438692,
+    "f1": 0.901863354037267,
+    "confusion_matrix": [
+      [
+        903,
+        75
+      ],
+      [
+        4,
+        363
+      ]
+    ],
+    "train_roc_auc": 0.9896354226222184,
+    "train_size": 5376,
+    "test_size": 1345
+  },
+  "group_holdout": {
+    "roc_auc": 0.9713044603944019,
+    "pr_auc_average_precision": 0.9402080175814421,
+    "brier_score": 0.0587108644560127,
+    "precision": 0.8448150833937635,
+    "recall": 0.9839527027027027,
+    "f1": 0.9090909090909091,
+    "confusion_matrix": [
+      [
+        1665,
+        214
+      ],
+      [
+        19,
+        1165
+      ]
+    ],
+    "available": true,
+    "group_field": "block_name",
+    "train_groups": 58,
+    "test_groups": 15,
+    "train_size": 3658,
+    "test_size": 3063
+  },
+  "feature_count": 47,
+  "label_counts": {
+    "0": 4886,
+    "1": 1835
+  },
+  "label_valid_rows": 6721,
+  "label_excluded_invalid_rows": 0,
+  "ratio_only_positive_count": 1901,
+  "ratio_positive_below_area_min_count": 66,
+  "large_absolute_change_below_ratio_count": 107,
+  "min_built_change_area_m2": 1000.0,
+  "positive_ratio": 0.2730248474929326,
+  "scale_pos_weight": 2.6626702997275205,
+  "best_n_estimators": 336,
+  "label_warning": "当前仍为建成区变化代理标签；获得真实调入调出图斑后应重新训练决策校准模型。"
+}

@@ -3,6 +3,7 @@
 from boundary_agent.spatial.shapefile import (
     MAX_UPLOAD_BYTES,
     SpatialDataset,
+    apply_constraint_layers,
     build_analysis_geojson,
     export_candidate_shapefile,
     read_shapefile_zip,
@@ -12,6 +13,7 @@ from boundary_agent.spatial.shapefile import (
 __all__ = [
     "MAX_UPLOAD_BYTES",
     "SpatialDataset",
+    "apply_constraint_layers",
     "build_analysis_geojson",
     "export_candidate_shapefile",
     "read_shapefile_zip",

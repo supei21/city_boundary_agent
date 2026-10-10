@@ -9,6 +9,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, Tool
 
 from boundary_agent.agent.events import EventCallback, emit
 from boundary_agent.llm.client import build_chat_model
+from boundary_agent.llm.policy_response import format_policy_answer, is_policy_query
 from boundary_agent.models import BlockDecision, ChatIntent, ChatTurnResult
 from boundary_agent.tools import build_block_tools
 
@@ -19,13 +20,15 @@ SYSTEM_PROMPT = """你是城镇开发边界增量空间动态适配智能体。
 工具使用规则：
 1. 查询街区目录使用 list_blocks。
 2. 查看原始字段使用 get_block_details，不要运行评价。
-3. 只需要模型开发概率时使用 score_blocks_with_trained_model，它只调用训练完成的XGBoost模型，不做规划分类。
-4. 分析或比较指定街区使用 analyze_blocks，工具会先调用训练模型补充development_probability，再比较dynamic_score、rank_city和key_drivers。
+3. 只需要模型开发概率时使用 score_blocks_with_trained_model。若上传数据包含dev_score，优先读取该综合发展潜力；否则调用训练完成的XGBoost模型。
+4. 分析或比较指定街区使用 analyze_blocks，工具会优先使用dev_score或训练模型补充development_probability，再比较dynamic_score、rank_city和key_drivers。
 5. 查找调入、调出候选或总体分析使用 identify_candidate_blocks，工具结果已经完成模型预测、空间评价、动态适配和规则核验。
 6. block_id 不明确时先查询，禁止编造街区、分数和约束结论。
 7. 如果本次只使用 list_blocks 或 get_block_details，只能展示原始字段，不得推断调入、调出、适宜性或风险等级。
+8. 工具返回的 policy_compliance、policy_reason 和 policy_requirements 是政策RAG判读结果。必须区分“符合”“有条件符合”“不符合”和“依据不足”，不得将依据不足表述为符合。
+9. 调入与调出必须严格区分：边界外地块适用调入判读，边界内地块适用调出或内部优化判读，禁止把两个方向拼接在同一结论中。
 
-获得足够工具证据后直接给出简洁中文结论，并说明规划匹配、主要驱动因素、风险和缺失信息。
+获得足够工具证据后直接给出简洁中文结论，并说明政策合规性、引用规则、规划匹配、主要驱动因素、风险和缺失信息。
 必须声明结果属于规则Demo辅助判断，不是正式规划结论。
 不要输出隐藏思维链；界面只展示工具行动、观察和审查等公开执行信息。
 """
@@ -102,7 +105,13 @@ def run_tool_agent(
 
     emit(event_callback, "understand", "理解任务", "正在判断问题需要哪些街区数据与分析工具")
 
-    tools = build_block_tools(blocks, config, event_callback=event_callback)
+    result_context: dict[str, Any] = {}
+    tools = build_block_tools(
+        blocks,
+        config,
+        event_callback=event_callback,
+        result_context=result_context,
+    )
     tool_map = {tool.name: tool for tool in tools}
     model = build_chat_model(settings).bind_tools(tools)
     messages = [SystemMessage(content=SYSTEM_PROMPT), HumanMessage(content=query)]
@@ -181,6 +190,24 @@ def run_tool_agent(
 
     unique_records = {str(item.get("block_id")): item for item in records}
     unique_decisions = {str(item.get("block_id")): item for item in decisions}
+    cached_workflow = result_context.get("workflow")
+    cached_target = result_context.get("target")
+    if isinstance(cached_workflow, dict) and "identify_candidate_blocks" in tool_names:
+        cached_decisions = list(cached_workflow.get("decisions", []))
+        if cached_target == "调入":
+            cached_decisions = [
+                item
+                for item in cached_decisions
+                if item.get("decision") in {"一级优先调入", "二级优先调入"}
+            ]
+        elif cached_target == "调出":
+            cached_decisions = [
+                item for item in cached_decisions if item.get("decision") == "建议调出"
+            ]
+        unique_decisions = {
+            str(item.get("block_id")): item for item in cached_decisions
+        }
+        workflow_summary = cached_workflow.get("summary") or workflow_summary
     validated_decisions = [BlockDecision.model_validate(item) for item in unique_decisions.values()]
     review_count = sum(item.manual_review_required for item in validated_decisions)
     if validated_decisions:
@@ -193,7 +220,13 @@ def run_tool_agent(
         )
 
     read_only_tools = {"list_blocks", "get_block_details"}
-    if tool_names and set(tool_names).issubset(read_only_tools):
+    if is_policy_query(query) and validated_decisions:
+        response_text = format_policy_answer(
+            query,
+            validated_decisions,
+            len(set(selected_ids)) or len(validated_decisions),
+        )
+    elif tool_names and set(tool_names).issubset(read_only_tools):
         field_names = sorted({key for item in unique_records.values() for key in item})
         field_text = "、".join(field_names[:20])
         suffix = "等" if len(field_names) > 20 else ""

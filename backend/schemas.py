@@ -117,3 +117,28 @@ class CreateUserModelResponse(BaseModel):
 
 class ReportGenerateRequest(BaseModel):
     model_id: str = Field(default="default", min_length=1, max_length=80)
+
+
+class RagPolicyDocumentSummary(BaseModel):
+    id: str
+    name: str
+    source: str
+    category: str = ""
+    suffix: str
+    size: int
+    text_length: int
+    excerpt: str = ""
+
+
+class RagPolicyDocumentDetail(RagPolicyDocumentSummary):
+    content: str
+
+
+class RagPolicySearchResult(BaseModel):
+    document_id: str | None = None
+    source: str
+    type: str
+    score: float
+    rule_id: str | None = None
+    article_ref: str | None = None
+    excerpt: str = ""

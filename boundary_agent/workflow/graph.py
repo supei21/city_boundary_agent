@@ -67,13 +67,18 @@ def model_prediction_node(state: WorkflowState):
             "model_dir": bundle.model_dir,
             "feature_count": bundle.feature_count,
             "missing_features": bundle.missing_features,
+            "source": bundle.source,
             "warning": bundle.warning,
         }
         emit(
             state.get("event_callback"),
             "observe",
             "模型预测完成",
-            f"已生成 {len(bundle.blocks)} 个地块的开发概率，模型特征数 {bundle.feature_count}。",
+            (
+                f"已读取 {len(bundle.blocks)} 个地块的综合发展潜力。"
+                if bundle.source == "uploaded_development_potential"
+                else f"已生成 {len(bundle.blocks)} 个地块的开发概率，模型特征数 {bundle.feature_count}。"
+            ),
             status="completed",
             metadata=summary,
         )
@@ -114,6 +119,16 @@ def constraint_node(state: WorkflowState):
         "识别生态红线、永久基本农田和灾害风险等限制。",
     )
     results = evaluate_constraints(_models(state), state["config"])
+    hard_count = sum(item.hard_constraint for item in results)
+    review_count = sum(item.manual_review_required for item in results)
+    emit(
+        state.get("event_callback"),
+        "observe",
+        "空间约束检查完成",
+        f"已完成 {len(results)} 个地块约束核验，{hard_count} 个命中硬约束，{review_count} 个需要复核。",
+        status="completed",
+        metadata={"hard_constraints": hard_count, "manual_review_required": review_count},
+    )
     return {"constraints": [item.model_dump() for item in results]}
 
 
@@ -183,6 +198,10 @@ def llm_explanation_node(state: WorkflowState):
 
 def report_node(state: WorkflowState):
     counts = Counter(item["decision"] for item in state["decisions"])
+    policy_counts = Counter(
+        item.get("policy_compliance") or "未判读"
+        for item in state["decisions"]
+    )
     ranked = sorted(
         state["decisions"],
         key=lambda item: (-float(item.get("dynamic_score", 0)), str(item.get("block_id", ""))),
@@ -201,6 +220,13 @@ def report_node(state: WorkflowState):
                 2,
             ) if state["decisions"] else 0,
             "top_candidate_ids": [item["block_id"] for item in ranked[:10]],
+            "policy_compliance_counts": dict(policy_counts),
+            "policy_compliant_candidate_ids": [
+                item["block_id"]
+                for item in ranked
+                if item.get("policy_compliance") == "符合"
+                and item.get("decision") in {"一级优先调入", "二级优先调入"}
+            ][:10],
             "trained_model": state.get("model_prediction", {}),
         },
     )

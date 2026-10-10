@@ -49,6 +49,8 @@ SHP_FIELD_ALIASES = {
     "data_statu": "data_status",
     "industrial": "industrial_ratio",
     "residentia": "residential_ratio",
+    "dev_score": "development_potential",
+    "DEV_SCORE": "development_potential",
 }
 TEXT_ATTRIBUTE_FIELDS = {
     "block_id",

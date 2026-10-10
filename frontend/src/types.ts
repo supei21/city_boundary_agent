@@ -100,6 +100,9 @@ export interface Decision {
   rank_city?: number | null;
   rank_district?: number | null;
   manual_review_required: boolean;
+  policy_compliance?: "符合" | "有条件符合" | "不符合" | "依据不足" | null;
+  policy_reason?: string | null;
+  policy_requirements?: string[];
 }
 
 export interface ChatResult {
@@ -148,4 +151,29 @@ export interface UserModelOutput {
 export interface CreateUserModelResponse {
   model: UserModelOutput;
   workspace: WorkspaceSummary;
+}
+
+export interface RagPolicyDocumentSummary {
+  id: string;
+  name: string;
+  source: string;
+  category: string;
+  suffix: string;
+  size: number;
+  text_length: number;
+  excerpt: string;
+}
+
+export interface RagPolicyDocumentDetail extends RagPolicyDocumentSummary {
+  content: string;
+}
+
+export interface RagPolicySearchResult {
+  document_id?: string | null;
+  source: string;
+  type: string;
+  score: number;
+  rule_id?: string | null;
+  article_ref?: string | null;
+  excerpt: string;
 }

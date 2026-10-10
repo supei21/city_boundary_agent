@@ -25,6 +25,12 @@ outputs/
 docs/presentations/*.pptx
 docs/presentations/*.pdf
 
+# 测试代码不入库
+tests/
+
+# 运行时自动生成的RAG索引（缺失时会自动重建）
+runtime/policy_rag/
+
 runtime/logs/*
 runtime/results/*
 runtime/exports/*

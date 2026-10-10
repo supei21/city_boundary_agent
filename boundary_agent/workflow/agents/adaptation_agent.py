@@ -76,6 +76,19 @@ def _constraint_cost(block: BlockInput, constraint: ConstraintResult) -> float:
 
 
 def _recommended_use(block: BlockInput) -> str:
+    sector_probabilities = {
+        "第二产业": block.sec_prob,
+        "第三产业与公共服务": block.ter_prob,
+        "交通与物流设施": block.tra_prob,
+    }
+    available = {
+        name: float(value)
+        for name, value in sector_probabilities.items()
+        if value is not None
+    }
+    if available:
+        return max(available.items(), key=lambda item: item[1])[0]
+
     industry = float(block.poi_industry or 0)
     service = float(block.poi_commercial or 0) + float(block.poi_public or 0)
     transport = float(block.poi_transport or 0) + float(block.poi_logistics or 0)
@@ -117,7 +130,10 @@ def evaluate_adaptation(
             for field, ranks in percentile_maps.items()
             if block.block_id in ranks
         }
-        if block.development_probability is not None:
+        if block.development_potential is not None:
+            probability = float(block.development_potential) * 100
+            probability_source = "上传数据中的综合发展潜力"
+        elif block.development_probability is not None:
             probability = float(block.development_probability)
             probability_source = "已有开发概率"
         elif signal_scores:

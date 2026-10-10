@@ -1,0 +1,270 @@
+{
+  "schema_version": 2,
+  "base_numeric_features": [
+    "area_km2",
+    "perimeter_",
+    "poi_total",
+    "poi_densit",
+    "poi_indust",
+    "poi_commer",
+    "poi_public",
+    "poi_transp",
+    "poi_logist",
+    "dem_mean",
+    "dem_std",
+    "dem_relief",
+    "pop_raw_su",
+    "Pop_densit",
+    "road_lengt",
+    "road_densi",
+    "main_road_",
+    "secondary_",
+    "branch_roa",
+    "NTL_MEAN",
+    "NTL_MAX",
+    "Water_prop",
+    "Tree_prop",
+    "Flood_prop",
+    "Crop_prop",
+    "Bulit_prop",
+    "Bare_prop",
+    "Sonw_prop",
+    "Range_prop"
+  ],
+  "categorical_features": [
+    {
+      "source": "dominant_l",
+      "categories": [
+        "1",
+        "2",
+        "5",
+        "7",
+        "11"
+      ],
+      "other": "OTHER"
+    }
+  ],
+  "neighbourhood_features": [
+    {
+      "source": "poi_total",
+      "coordinate_x": "centroid_x",
+      "coordinate_y": "centroid_y",
+      "radii_m": [
+        500,
+        1000
+      ],
+      "unit": "count_per_square_kilometre",
+      "include_self": true
+    },
+    {
+      "source": "poi_indust",
+      "coordinate_x": "centroid_x",
+      "coordinate_y": "centroid_y",
+      "radii_m": [
+        500,
+        1000
+      ],
+      "unit": "count_per_square_kilometre",
+      "include_self": true
+    },
+    {
+      "source": "poi_commer",
+      "coordinate_x": "centroid_x",
+      "coordinate_y": "centroid_y",
+      "radii_m": [
+        500,
+        1000
+      ],
+      "unit": "count_per_square_kilometre",
+      "include_self": true
+    },
+    {
+      "source": "poi_public",
+      "coordinate_x": "centroid_x",
+      "coordinate_y": "centroid_y",
+      "radii_m": [
+        500,
+        1000
+      ],
+      "unit": "count_per_square_kilometre",
+      "include_self": true
+    },
+    {
+      "source": "poi_transp",
+      "coordinate_x": "centroid_x",
+      "coordinate_y": "centroid_y",
+      "radii_m": [
+        500,
+        1000
+      ],
+      "unit": "count_per_square_kilometre",
+      "include_self": true
+    },
+    {
+      "source": "poi_logist",
+      "coordinate_x": "centroid_x",
+      "coordinate_y": "centroid_y",
+      "radii_m": [
+        500,
+        1000
+      ],
+      "unit": "count_per_square_kilometre",
+      "include_self": true
+    }
+  ],
+  "directly_excluded": {
+    "duplicate_geometry": [
+      "Shape_Area",
+      "Shape_Leng"
+    ],
+    "location_memory": [
+      "centroid_x",
+      "centroid_y"
+    ],
+    "future_or_label_leakage": [
+      "Water_pro2",
+      "Tree_pro2",
+      "Flood_pro2",
+      "Crop_pro2",
+      "Bulit_pro2",
+      "Bare_pro2",
+      "Sonw_pro2",
+      "Range_pro2",
+      "Water_CHAG",
+      "Tree_CHAG",
+      "Flood_CHAG",
+      "Crop_CHAG",
+      "Bulit_CHAG",
+      "Bare_CHAG",
+      "Snow_CHAG",
+      "Range_CHAG",
+      "label_inclusion"
+    ],
+    "redundant_raw_landcover": [
+      "VALUE_1",
+      "VALUE_2",
+      "VALUE_4",
+      "VALUE_5",
+      "VALUE_7",
+      "VALUE_8",
+      "VALUE_10",
+      "VALUE_11",
+      "Water",
+      "Trees",
+      "Flooded_Ve",
+      "Crops",
+      "Bulit_Area",
+      "Bare_Groun",
+      "Snow",
+      "Rangeland"
+    ],
+    "project_features": []
+  },
+  "requested_but_unavailable": [
+    "population_growth",
+    "distance_to_main_road_or_expressway_entrance",
+    "distance_to_city_centre",
+    "distance_to_industrial_park",
+    "distance_to_rail_station"
+  ],
+  "feature_labels": {
+    "area_km2": "地块面积",
+    "perimeter_": "地块周长",
+    "poi_total": "地块POI总量",
+    "poi_densit": "地块POI密度",
+    "poi_indust": "产业POI数量",
+    "poi_commer": "商业POI数量",
+    "poi_public": "公共服务POI数量",
+    "poi_transp": "交通POI数量",
+    "poi_logist": "物流POI数量",
+    "dem_mean": "平均高程",
+    "dem_std": "高程标准差",
+    "dem_relief": "地形起伏度",
+    "pop_raw_su": "地块人口总量",
+    "Pop_densit": "人口密度",
+    "road_lengt": "道路总长度",
+    "road_densi": "道路密度",
+    "main_road_": "主干路密度",
+    "secondary_": "次干路密度",
+    "branch_roa": "支路密度",
+    "NTL_MEAN": "平均夜间灯光",
+    "NTL_MAX": "最大夜间灯光",
+    "Water_prop": "水域比例",
+    "Tree_prop": "林地比例",
+    "Flood_prop": "淹水植被比例",
+    "Crop_prop": "耕地比例",
+    "Bulit_prop": "建成区比例",
+    "Bare_prop": "裸地比例",
+    "Sonw_prop": "冰雪比例",
+    "Range_prop": "草地比例",
+    "poi_total__nbr_density_500m": "500米邻域地块POI总量密度",
+    "poi_total__nbr_density_1000m": "1000米邻域地块POI总量密度",
+    "poi_indust__nbr_density_500m": "500米邻域产业POI数量密度",
+    "poi_indust__nbr_density_1000m": "1000米邻域产业POI数量密度",
+    "poi_commer__nbr_density_500m": "500米邻域商业POI数量密度",
+    "poi_commer__nbr_density_1000m": "1000米邻域商业POI数量密度",
+    "poi_public__nbr_density_500m": "500米邻域公共服务POI数量密度",
+    "poi_public__nbr_density_1000m": "1000米邻域公共服务POI数量密度",
+    "poi_transp__nbr_density_500m": "500米邻域交通POI数量密度",
+    "poi_transp__nbr_density_1000m": "1000米邻域交通POI数量密度",
+    "poi_logist__nbr_density_500m": "500米邻域物流POI数量密度",
+    "poi_logist__nbr_density_1000m": "1000米邻域物流POI数量密度",
+    "dominant_l__1": "主导土地利用=1",
+    "dominant_l__2": "主导土地利用=2",
+    "dominant_l__5": "主导土地利用=5",
+    "dominant_l__7": "主导土地利用=7",
+    "dominant_l__11": "主导土地利用=11",
+    "dominant_l__OTHER": "主导土地利用=OTHER"
+  },
+  "feature_names": [
+    "area_km2",
+    "perimeter_",
+    "poi_total",
+    "poi_densit",
+    "poi_indust",
+    "poi_commer",
+    "poi_public",
+    "poi_transp",
+    "poi_logist",
+    "dem_mean",
+    "dem_std",
+    "dem_relief",
+    "pop_raw_su",
+    "Pop_densit",
+    "road_lengt",
+    "road_densi",
+    "main_road_",
+    "secondary_",
+    "branch_roa",
+    "NTL_MEAN",
+    "NTL_MAX",
+    "Water_prop",
+    "Tree_prop",
+    "Flood_prop",
+    "Crop_prop",
+    "Bulit_prop",
+    "Bare_prop",
+    "Sonw_prop",
+    "Range_prop",
+    "poi_total__nbr_density_500m",
+    "poi_total__nbr_density_1000m",
+    "poi_indust__nbr_density_500m",
+    "poi_indust__nbr_density_1000m",
+    "poi_commer__nbr_density_500m",
+    "poi_commer__nbr_density_1000m",
+    "poi_public__nbr_density_500m",
+    "poi_public__nbr_density_1000m",
+    "poi_transp__nbr_density_500m",
+    "poi_transp__nbr_density_1000m",
+    "poi_logist__nbr_density_500m",
+    "poi_logist__nbr_density_1000m",
+    "dominant_l__1",
+    "dominant_l__2",
+    "dominant_l__5",
+    "dominant_l__7",
+    "dominant_l__11",
+    "dominant_l__OTHER"
+  ],
+  "constant_features_removed": [],
+  "missing_features_during_training": []
+}

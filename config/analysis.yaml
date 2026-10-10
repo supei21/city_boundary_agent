@@ -32,12 +32,18 @@ dynamic_adaptation:
   planning_neutral_score: 50
   district_candidate_percentile: 0.20
 
+development_hotspot:
+  # 边界外按分位数选调入热点；边界内dev_score低于0.40时进入调出候选。
+  primary_percentile: 0.95
+  secondary_percentile: 0.80
+  exclusion_max_score: 0.40
+
 trained_model:
   enabled: true
-  model_dir: "E:\\VscodeMyPrograma\\boundary_agent_demo\\models"
+  model_dir: "models"
   min_feature_coverage: 0.50
   probability_field: development_probability
-  note: 读取训练工程中的 xgb_boundary.json 和 feature_names.json，作为智能体工具的开发变化概率输入。
+  note: 数据包有 dev_score 时直接使用；没有时读取项目内 XGBoost 模型生成开发概率。
 
 scales:
   road_density_high: 8.0
@@ -52,6 +58,15 @@ hard_constraints:
   ecological_redline: true
   permanent_farmland: true
   prohibited_disaster_zone: true
+
+policy_rag:
+  enabled: true
+  policy_dir: "D:\\downloadzhuomian\\Codex城镇开发边界智能体\\rag1.0\\rag1.0\\城镇边界政策库"
+  rules_path: "D:\\downloadzhuomian\\Codex城镇开发边界智能体\\rag1.0\\rag1.0\\城镇边界政策库\\policy_rules.json"
+  index_path: "runtime/policy_rag/policy_index.json"
+  retrieval_k: 6
+  chunk_size: 900
+  chunk_overlap: 120
 
 output:
   language: zh-CN
