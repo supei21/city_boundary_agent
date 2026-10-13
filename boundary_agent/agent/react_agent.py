@@ -11,7 +11,8 @@ from boundary_agent.agent.events import EventCallback, emit
 from boundary_agent.llm.client import build_chat_model
 from boundary_agent.llm.policy_response import format_policy_answer, is_policy_query
 from boundary_agent.models import BlockDecision, ChatIntent, ChatTurnResult
-from boundary_agent.tools import build_block_tools
+from boundary_agent.tools import build_block_tools, build_landscape_tools
+from boundary_agent.tools.landscape_tools import LandscapeEvaluator, LatestAnalysisProvider
 
 
 SYSTEM_PROMPT = """你是城镇开发边界增量空间动态适配智能体。
@@ -23,12 +24,15 @@ SYSTEM_PROMPT = """你是城镇开发边界增量空间动态适配智能体。
 3. 只需要模型开发概率时使用 score_blocks_with_trained_model。若上传数据包含dev_score，优先读取该综合发展潜力；否则调用训练完成的XGBoost模型。
 4. 分析或比较指定街区使用 analyze_blocks，工具会优先使用dev_score或训练模型补充development_probability，再比较dynamic_score、rank_city和key_drivers。
 5. 查找调入、调出候选或总体分析使用 identify_candidate_blocks，工具结果已经完成模型预测、空间评价、动态适配和规则核验。
-6. block_id 不明确时先查询，禁止编造街区、分数和约束结论。
-7. 如果本次只使用 list_blocks 或 get_block_details，只能展示原始字段，不得推断调入、调出、适宜性或风险等级。
-8. 工具返回的 policy_compliance、policy_reason 和 policy_requirements 是政策RAG判读结果。必须区分“符合”“有条件符合”“不符合”和“依据不足”，不得将依据不足表述为符合。
-9. 调入与调出必须严格区分：边界外地块适用调入判读，边界内地块适用调出或内部优化判读，禁止把两个方向拼接在同一结论中。
+6. 评价地块调入或调出后对开发边界完整性、连续性和破碎度的影响，使用 evaluate_boundary_morphology。不得自行估算NP、PD、LPI、ED、LSI或AI；“调入”使用include，“调出”使用exclude，不明确时使用auto。
+7. 用户提到“当前、已有、上一次”的候选地块形态评价时，直接调用 evaluate_boundary_morphology 且不传block_ids和limit；该工具会读取最近一次调入调出分析，并评价全部一级调入、二级调入和建议调出地块，不得先调用 identify_candidate_blocks，不得重新运行XGBoost。只有用户明确要求限定数量时才传limit。
+8. 只有用户明确要求“重新分析、重新识别、先识别再评价”时，才先调用 identify_candidate_blocks，再把得到的调入调出候选及其动作传给 evaluate_boundary_morphology。
+9. block_id 不明确且最近一次分析也没有结果时，应说明需要先完成候选地块分析，禁止编造街区、分数和约束结论。
+10. 如果本次只使用 list_blocks 或 get_block_details，只能展示原始字段，不得推断调入、调出、适宜性或风险等级。
+11. 工具返回的 policy_compliance、policy_reason 和 policy_requirements 是政策RAG判读结果。必须区分“符合”“有条件符合”“不符合”和“依据不足”，不得将依据不足表述为符合。
+12. 调入与调出必须严格区分：边界外地块适用调入判读，边界内地块适用调出或内部优化判读，禁止把两个方向拼接在同一结论中。
 
-获得足够工具证据后直接给出简洁中文结论，并说明政策合规性、引用规则、规划匹配、主要驱动因素、风险和缺失信息。
+获得足够工具证据后直接给出简洁中文结论。候选识别任务说明政策合规性、引用规则、规划匹配、主要驱动因素、风险和缺失信息；形态评价任务说明六项指数变化、三个评价维度和拓扑风险。只解释工具实际返回的字段。
 必须声明结果属于规则Demo辅助判断，不是正式规划结论。
 不要输出隐藏思维链；界面只展示工具行动、观察和审查等公开执行信息。
 """
@@ -46,8 +50,18 @@ def _message_text(message: AIMessage) -> str:
     return str(content).strip()
 
 
+def _reuses_existing_analysis(query: str) -> bool:
+    """Morphology evaluation is downstream unless the user explicitly requests a rerun."""
+
+    morphology_words = ("形态评价", "边界形态", "景观指数", "边界完整", "边界连续", "破碎度")
+    rerun_words = ("重新分析", "重新识别", "先识别再评价", "重新运行候选", "重新跑候选")
+    return any(word in query for word in morphology_words) and not any(word in query for word in rerun_words)
+
+
 def _intent_from_tools(tool_names: list[str]) -> ChatIntent:
-    if "identify_candidate_blocks" in tool_names:
+    if "evaluate_boundary_morphology" in tool_names:
+        action = "evaluate_landscape"
+    elif "identify_candidate_blocks" in tool_names:
         action = "summarize_all"
     elif "analyze_blocks" in tool_names:
         action = "analyze_blocks"
@@ -65,6 +79,19 @@ def _observation_summary(tool_name: str, payload: dict[str, Any]) -> str:
         return str(payload["error"])
     if tool_name in {"list_blocks", "get_block_details", "score_blocks_with_trained_model"}:
         return f"读取到 {len(payload.get('records', []))} 条街区记录"
+    if tool_name == "evaluate_boundary_morphology":
+        summary = payload.get("summary") or {}
+        grade_counts = summary.get("grade_counts") or {}
+        risk_count = sum(
+            bool(item.get("topology_check", {}).get("risk"))
+            for item in payload.get("results", [])
+        )
+        return (
+            f"完成 {summary.get('evaluated_count', len(payload.get('results', [])))} 个地块形态评价，"
+            f"改善 {summary.get('improved_count', 0)} 个、稳定 {summary.get('balanced_count', 0)} 个、"
+            f"恶化 {summary.get('worsened_count', 0)} 个，拓扑风险 {risk_count} 个"
+            + (f"（五档统计已形成：{sum(grade_counts.values())} 个）" if grade_counts else "")
+        )
     decisions = payload.get("decisions", [])
     summary = payload.get("summary") or {}
     trained_model = summary.get("trained_model") or {}
@@ -95,6 +122,8 @@ def run_tool_agent(
     settings: dict[str, Any] | None = None,
     *,
     event_callback: EventCallback | None = None,
+    landscape_evaluator: LandscapeEvaluator | None = None,
+    latest_analysis_provider: LatestAnalysisProvider | None = None,
     max_steps: int = 4,
 ) -> ChatTurnResult:
     """Run a bounded ReAct loop using structured tool calls.
@@ -105,6 +134,7 @@ def run_tool_agent(
 
     emit(event_callback, "understand", "理解任务", "正在判断问题需要哪些街区数据与分析工具")
 
+    landscape_result_holder: dict[str, dict[str, Any]] = {}
     result_context: dict[str, Any] = {}
     tools = build_block_tools(
         blocks,
@@ -112,6 +142,20 @@ def run_tool_agent(
         event_callback=event_callback,
         result_context=result_context,
     )
+    if _reuses_existing_analysis(query):
+        model_workflow_tools = {
+            "score_blocks_with_trained_model",
+            "analyze_blocks",
+            "identify_candidate_blocks",
+        }
+        tools = [item for item in tools if item.name not in model_workflow_tools]
+    if landscape_evaluator is not None:
+        tools.extend(build_landscape_tools(
+            {str(item.get("block_id")) for item in blocks if item.get("block_id") is not None},
+            landscape_evaluator,
+            latest_analysis_provider=latest_analysis_provider,
+            on_result=lambda result: landscape_result_holder.update({"value": result}),
+        ))
     tool_map = {tool.name: tool for tool in tools}
     model = build_chat_model(settings).bind_tools(tools)
     messages = [SystemMessage(content=SYSTEM_PROMPT), HumanMessage(content=query)]
@@ -245,6 +289,7 @@ def run_tool_agent(
         block_records=list(unique_records.values()),
         decisions=validated_decisions,
         workflow_summary=workflow_summary,
+        landscape_evaluation=landscape_result_holder.get("value"),
         model_used=True,
         warnings=warnings,
         tool_trace=trace,

@@ -165,6 +165,7 @@ class TaskOutput(BaseModel):
 ChatAction = Literal[
     "show_data",
     "analyze_blocks",
+    "evaluate_landscape",
     "find_inclusion",
     "find_exclusion",
     "compare_blocks",
@@ -197,6 +198,7 @@ class ChatTurnResult(BaseModel):
     block_records: list[dict[str, Any]] = Field(default_factory=list)
     decisions: list[BlockDecision] = Field(default_factory=list)
     workflow_summary: dict[str, Any] = Field(default_factory=dict)
+    landscape_evaluation: dict[str, Any] | None = None
     model_used: bool = False
     warnings: list[str] = Field(default_factory=list)
     tool_trace: list[dict[str, Any]] = Field(default_factory=list)

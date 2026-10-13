@@ -1,14 +1,29 @@
 import { lazy, Suspense } from "react";
 import type { FeatureCollection } from "geojson";
 import { Map } from "lucide-react";
+import type { LandscapeEvaluation, LandscapeScenarioEvaluation } from "../types";
 
 const SpatialMap = lazy(() => import("./SpatialMap").then((module) => ({ default: module.SpatialMap })));
 
 interface Props {
   data: FeatureCollection | null;
+  boundaryData: FeatureCollection | null;
+  landscapeEvaluation: LandscapeEvaluation | null;
+  landscapeScenarioEvaluation: LandscapeScenarioEvaluation | null;
+  busy: boolean;
+  onRunScenario: (blockIds: string[], action: "include" | "exclude") => void;
+  onClearScenario: () => void;
 }
 
-export function MapView({ data }: Props) {
+export function MapView({
+  data,
+  boundaryData,
+  landscapeEvaluation,
+  landscapeScenarioEvaluation,
+  busy,
+  onRunScenario,
+  onClearScenario,
+}: Props) {
   const metadata = data && typeof (data as FeatureCollection & { metadata?: unknown }).metadata === "object"
     ? (data as FeatureCollection & { metadata: Record<string, unknown> }).metadata
     : null;
@@ -30,7 +45,15 @@ export function MapView({ data }: Props) {
         </p>
       )}
       <Suspense fallback={<div className="preview-loading">正在加载地图组件…</div>}>
-        <SpatialMap data={data} />
+        <SpatialMap
+          data={data}
+          boundaryData={boundaryData}
+          landscapeEvaluation={landscapeEvaluation}
+          landscapeScenarioEvaluation={landscapeScenarioEvaluation}
+          busy={busy}
+          onRunScenario={onRunScenario}
+          onClearScenario={onClearScenario}
+        />
       </Suspense>
     </div>
   );

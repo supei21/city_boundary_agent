@@ -12,6 +12,11 @@ from boundary_agent.llm.client import build_chat_model, model_is_ready
 from boundary_agent.llm.policy_response import format_policy_answer, is_policy_query
 from boundary_agent.models import BlockDecision, ChatIntent, ChatTurnResult
 from boundary_agent.workflow.graph import run_workflow
+from boundary_agent.tools.landscape_tools import (
+    LandscapeEvaluator,
+    LatestAnalysisProvider,
+    build_landscape_tools,
+)
 
 
 INCLUSION_DECISIONS = {"一级优先调入", "二级优先调入"}
@@ -46,6 +51,8 @@ def _fallback_intent(query: str, blocks: list[dict]) -> ChatIntent:
         action = "help"
     elif any(word in text for word in ("查看数据", "查看街区", "街区数据", "原始属性", "属性数据", "有哪些字段")):
         action = "show_data"
+    elif any(word in text for word in ("形态评价", "景观指数", "边界完整", "边界连续", "破碎度")):
+        action = "evaluate_landscape"
     elif any(word in text for word in ("比较", "对比", "区别")):
         action = "compare_blocks"
     elif any(word in text for word in ("调出", "移出", "退出边界")):
@@ -64,6 +71,8 @@ def _fallback_intent(query: str, blocks: list[dict]) -> ChatIntent:
         inside = True
 
     broad_action = action in {"find_inclusion", "find_exclusion", "summarize_all"}
+    if action == "evaluate_landscape" and not matched_ids and not matched_names:
+        broad_action = True
     if action == "show_data" and not matched_ids and not matched_names:
         broad_action = True
     analyze_all = (
@@ -71,7 +80,7 @@ def _fallback_intent(query: str, blocks: list[dict]) -> ChatIntent:
         or any(word in text for word in ("所有", "全部", "哪些", "哪个"))
         or (inside is not None and "街区" in text and not matched_ids and not matched_names)
     )
-    needs_target = action in {"analyze_blocks", "compare_blocks"} and not analyze_all
+    needs_target = action in {"analyze_blocks", "compare_blocks", "evaluate_landscape"} and not analyze_all
     clarification = needs_target and not matched_ids and not matched_names
     question = "请告诉我要分析的 block_id 或街区名称。" if clarification else None
     if action == "compare_blocks" and len(set(matched_ids + matched_names)) < 2:
@@ -118,6 +127,7 @@ def parse_user_intent(query: str, blocks: list[dict], settings: dict[str, Any] |
 允许的action：
 - show_data：查看全部或指定街区的原始属性，不进行分析
 - analyze_blocks：分析指定街区
+- evaluate_landscape：评价指定街区调入或调出后对开发边界完整性、连续性和破碎度的影响
 - find_inclusion：查找适合调入的街区
 - find_exclusion：查找建议调出的街区
 - compare_blocks：比较两个或多个街区
@@ -171,6 +181,7 @@ def _fallback_answer(query: str, intent: ChatIntent, decisions: list[dict], tota
             "- `比较 WH2025_DEMO001 和 WH2025_DEMO003`\n"
             "- `哪些街区适合调入开发边界？`\n"
             "- `找出建议调出的边界内街区`\n"
+            "- `评价 WH2025_DEMO001 调入后的边界形态`\n"
             "- `汇总全部街区的识别结果`"
         )
     if not decisions:
@@ -252,6 +263,8 @@ def _handle_chat_fixed_flow(
     settings: dict[str, Any] | None = None,
     *,
     event_callback: EventCallback | None = None,
+    landscape_evaluator: LandscapeEvaluator | None = None,
+    latest_analysis_provider: LatestAnalysisProvider | None = None,
 ) -> ChatTurnResult:
     emit(event_callback, "understand", "理解任务", "使用本地可复现规则识别用户意图")
     intent, warnings = parse_user_intent(query, blocks, settings)
@@ -292,6 +305,90 @@ def _handle_chat_fixed_flow(
         return ChatTurnResult(
             intent=intent,
             response="没有在当前数据中找到对应街区。请检查 block_id、街区名称或边界内外条件。",
+            model_used=intent.parser == "llm",
+            warnings=warnings,
+        )
+
+    if intent.action == "evaluate_landscape":
+        if landscape_evaluator is None:
+            message = "当前对话没有连接形态评价服务，请确认空间数据和城镇开发边界已经加载。"
+            emit(event_callback, "error", "形态评价不可用", message, status="warning")
+            return ChatTurnResult(
+                intent=intent,
+                response=message,
+                selected_block_ids=[str(block["block_id"]) for block in selected],
+                model_used=intent.parser == "llm",
+                warnings=warnings + [message],
+            )
+        has_include = any(word in query for word in ("调入", "纳入", "加入边界"))
+        has_exclude = any(word in query for word in ("调出", "移出", "退出边界"))
+        action = "include" if has_include and not has_exclude else "exclude" if has_exclude and not has_include else "auto"
+        target = "调入" if has_include and not has_exclude else "调出" if has_exclude and not has_include else "全部"
+        explicit_target = bool(intent.block_ids or intent.block_names)
+        selected_ids = [str(block["block_id"]) for block in selected] if explicit_target else []
+        emit(
+            event_callback,
+            "action",
+            "运行边界形态评价",
+            (
+                f"对 {len(selected_ids)} 个明确地块构造评价情景"
+                if selected_ids
+                else "读取最近一次调入调出分析中的候选地块"
+            ),
+        )
+        holder: dict[str, dict[str, Any]] = {}
+        morphology_tool = build_landscape_tools(
+            {str(block.get("block_id")) for block in blocks if block.get("block_id") is not None},
+            landscape_evaluator,
+            latest_analysis_provider=latest_analysis_provider,
+            on_result=lambda result: holder.update({"value": result}),
+        )[0]
+        tool_payload = json.loads(morphology_tool.invoke({
+            "block_ids": selected_ids,
+            "action": action,
+            "target": target,
+            "limit": len(selected_ids) if selected_ids else None,
+        }))
+        if tool_payload.get("error"):
+            message = f"形态评价失败：{tool_payload['error']}"
+            emit(event_callback, "error", "形态评价失败", str(tool_payload["error"]), status="error")
+            return ChatTurnResult(
+                intent=intent,
+                response=message,
+                selected_block_ids=tool_payload.get("selected_block_ids", selected_ids),
+                model_used=intent.parser == "llm",
+                warnings=warnings + [message],
+            )
+        landscape = holder["value"]
+        selected_ids = [str(value) for value in tool_payload.get("selected_block_ids", [])]
+        summary = landscape.get("summary") or {}
+        lines = [
+            f"已完成 {summary.get('evaluated_count', 0)} 个地块的边界形态评价。",
+            (
+                f"总体改善 {summary.get('improved_count', 0)} 个、基本稳定 "
+                f"{summary.get('balanced_count', 0)} 个、总体恶化 {summary.get('worsened_count', 0)} 个。"
+            ),
+        ]
+        for item in landscape.get("results", [])[:10]:
+            lines.append(
+                f"- **{item.get('block_id')}（{item.get('action_label')}）**："
+                f"{item.get('overall_label')}。{item.get('conclusion')}"
+            )
+        lines.append("以上为Demo形态评价辅助判断，不等同于正式规划结论。")
+        emit(
+            event_callback,
+            "observe",
+            "形成形态评价结果",
+            f"返回 {summary.get('evaluated_count', 0)} 个地块的六项指数和拓扑检查结果",
+            status="completed",
+        )
+        emit(event_callback, "answer", "完成回答", "已整理形态评价结论", status="completed")
+        return ChatTurnResult(
+            intent=intent,
+            response="\n\n".join(lines),
+            selected_block_ids=selected_ids,
+            workflow_summary=summary,
+            landscape_evaluation=landscape,
             model_used=intent.parser == "llm",
             warnings=warnings,
         )
@@ -382,6 +479,8 @@ def handle_chat(
     settings: dict[str, Any] | None = None,
     *,
     event_callback: EventCallback | None = None,
+    landscape_evaluator: LandscapeEvaluator | None = None,
+    latest_analysis_provider: LatestAnalysisProvider | None = None,
 ) -> ChatTurnResult:
     """模型可用时运行工具智能体；不可用时保留确定性的本地演示。"""
     workflow_config = config or load_config()
@@ -393,6 +492,8 @@ def handle_chat(
                 workflow_config,
                 settings,
                 event_callback=event_callback,
+                landscape_evaluator=landscape_evaluator,
+                latest_analysis_provider=latest_analysis_provider,
             )
         except Exception as exc:
             emit(
@@ -408,6 +509,8 @@ def handle_chat(
                 workflow_config,
                 {"enabled": False},
                 event_callback=event_callback,
+                landscape_evaluator=landscape_evaluator,
+                latest_analysis_provider=latest_analysis_provider,
             )
             fallback.warnings.insert(0, f"工具智能体调用失败，已切换本地兜底流程：{exc}")
             return fallback
@@ -417,4 +520,6 @@ def handle_chat(
         workflow_config,
         settings,
         event_callback=event_callback,
+        landscape_evaluator=landscape_evaluator,
+        latest_analysis_provider=latest_analysis_provider,
     )

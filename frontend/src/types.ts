@@ -1,7 +1,9 @@
+import type { FeatureCollection } from "geojson";
+
 export interface ArtifactSummary {
   id: string;
   name: string;
-  kind: "dataset" | "analysis" | "spatial" | "geojson" | "report" | "pdf";
+  kind: "dataset" | "analysis" | "landscape" | "spatial" | "geojson" | "report" | "pdf";
   mime: string;
   size: number;
   created_at: string;
@@ -29,6 +31,153 @@ export interface ConstraintDatasetSummary {
   warnings: string[];
 }
 
+export interface LandscapeBoundarySummary {
+  loaded: boolean;
+  name?: string | null;
+  source_crs?: string | null;
+  analysis_crs?: string | null;
+  source_geometry_type?: string | null;
+  source_feature_count: number;
+  patch_count: number;
+  area_km2: number;
+  warnings: string[];
+}
+
+export interface LandscapeResult {
+  block_id: string;
+  block_name?: string | null;
+  action: "include" | "exclude";
+  action_label: string;
+  boundary_overlap_ratio: number;
+  changed_area_km2: number;
+  demo_shape_score: number;
+  improved_metrics: string[];
+  worsened_metrics: string[];
+  metric_assessments: Record<string, {
+    state: "improved" | "unchanged" | "worsened";
+    strength: "significant" | "slight" | "stable";
+    score: number;
+    relative_change?: number | null;
+    absolute_change?: number;
+    threshold_basis?: "count" | "relative" | "percentage_point";
+  }>;
+  dimensions: Record<string, {
+    label: string;
+    metrics: string[];
+    score: number;
+    grade: LandscapeGrade;
+    grade_label: string;
+  }>;
+  topology_check: {
+    status: "no_change" | "island" | "nearby_connected" | "weak_connection" | "connected" | "split" | "intact";
+    label: string;
+    risk: boolean;
+    before_patch_count: number;
+    after_patch_count: number;
+    shared_boundary_length_m: number;
+    nearest_distance_m?: number;
+    adjacency_tolerance_m?: number;
+    message: string;
+    risk_level: "none" | "low" | "medium" | "high";
+    risk_label: string;
+    affected_area_km2: number;
+    affected_share_percent: number;
+  };
+  expansion_pattern?: {
+    index: number;
+    pattern: "infill" | "edge_expansion" | "outlying";
+    label: string;
+    buffer_m: number;
+    occupied_buffer_area_m2: number;
+    vacant_buffer_area_m2: number;
+  } | null;
+  overall_grade: LandscapeGrade;
+  overall_label: string;
+  overall_score: number;
+  before: Record<string, number>;
+  after: Record<string, number>;
+  delta: Record<string, number>;
+  conclusion: string;
+}
+
+export type LandscapeGrade =
+  | "significantly_improved"
+  | "slightly_improved"
+  | "stable"
+  | "slightly_worsened"
+  | "significantly_worsened";
+
+export interface LandscapeEvaluation {
+  type: "landscape_analysis";
+  boundary: LandscapeBoundarySummary;
+  spatial: FeatureCollection;
+  summary: {
+    evaluated_count: number;
+    improved_count: number;
+    worsened_count: number;
+    balanced_count: number;
+    grade_counts: Record<LandscapeGrade, number>;
+    average_demo_shape_score: number;
+    note: string;
+  };
+  results: LandscapeResult[];
+  artifact: ArtifactSummary;
+}
+
+export interface LandscapeProgress {
+  phase: "preparing" | "evaluating" | "finalizing" | "completed" | "error";
+  status: "running" | "completed" | "error";
+  completed: number;
+  total: number;
+  evaluated_count: number;
+  percent: number;
+  current_block_id?: string | null;
+  message: string;
+}
+
+export interface LandscapeScenarioConnection {
+  block_id: string;
+  block_name?: string | null;
+  status: "direct" | "conditional" | "isolated" | "removal_member";
+  label: string;
+  group_id: string;
+  connected_to_boundary: boolean;
+  neighbor_block_ids: string[];
+}
+
+export type LandscapeScenarioResult = Omit<LandscapeResult, "block_id" | "block_name" | "action_label" | "boundary_overlap_ratio"> & {
+  evaluation_mode: "scenario";
+  selected_block_ids: string[];
+  selected_count: number;
+  action_label: string;
+  block_connections: LandscapeScenarioConnection[];
+  connection_counts: Record<"direct" | "conditional" | "isolated" | "removal_member", number>;
+  groups: Array<{
+    group_id: string;
+    block_ids: string[];
+    block_count: number;
+    connected_to_boundary: boolean;
+  }>;
+};
+
+export interface LandscapeScenarioEvaluation {
+  type: "landscape_scenario_analysis";
+  boundary: LandscapeBoundarySummary;
+  summary: {
+    selected_count: number;
+    action: "include" | "exclude";
+    action_label: string;
+    group_count: number;
+    connection_counts: Record<string, number>;
+    overall_grade: LandscapeGrade;
+    overall_label: string;
+    note: string;
+  };
+  scenario: LandscapeScenarioResult;
+  spatial: FeatureCollection;
+  artifact: ArtifactSummary;
+}
+
 export interface PolicyDocumentSummary {
   id: string;
   name: string;
@@ -47,6 +196,7 @@ export interface WorkspaceSummary {
   has_spatial_data: boolean;
   dataset_warnings: string[];
   constraint_dataset: ConstraintDatasetSummary;
+  landscape_boundary: LandscapeBoundarySummary;
   policy_documents: PolicyDocumentSummary[];
   model_diagnostics: {
     enabled?: boolean;
@@ -114,6 +264,7 @@ export interface ChatResult {
   model_id?: string;
   model_name?: string;
   workflow_summary: Record<string, unknown>;
+  landscape_evaluation?: LandscapeEvaluation | null;
 }
 
 export interface ChatMessage {
@@ -128,6 +279,7 @@ export interface ChatMessage {
 
 export type StreamPacket =
   | { type: "process"; event: AgentEvent }
+  | { type: "landscape_progress"; progress: LandscapeProgress }
   | { type: "answer_delta"; content: string }
   | { type: "result"; result: ChatResult; artifact: ArtifactSummary | null }
   | { type: "error"; message: string };
