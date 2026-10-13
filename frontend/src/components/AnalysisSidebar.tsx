@@ -1,17 +1,19 @@
 import { useState } from "react";
-import { BarChart3, CheckCircle2, ChevronDown, Download, Eye, FileText, Play, X } from "lucide-react";
+import { BarChart3, CheckCircle2, ChevronDown, Download, Eye, FileText, Play, Shapes, X } from "lucide-react";
 
 import { artifactDownloadUrl, artifactPreviewUrl } from "../api";
-import type { ArtifactSummary, Decision, WorkspaceSummary } from "../types";
+import type { ArtifactSummary, Decision, LandscapeProgress, WorkspaceSummary } from "../types";
 
 interface Props {
   open: boolean;
   workspace: WorkspaceSummary | null;
   decisions: Decision[];
   busy: boolean;
+  landscapeProgress: LandscapeProgress | null;
   artifacts: ArtifactSummary[];
   selectedModelId: string;
   onRunAnalysis: () => void;
+  onRunLandscape: () => void;
   onGeneratePolicyReport: () => void;
   onClose: () => void;
 }
@@ -26,6 +28,7 @@ const METRIC_LABELS: Record<string, string> = {
 
 const DIRECTORY_ITEMS = [
   { key: "analysis", icon: BarChart3, title: "候选地块分析", subtitle: "识别调入/调出候选地块" },
+  { key: "landscape", icon: Shapes, title: "边界形态评价", subtitle: "比较调整前后的完整性与连续性" },
   { key: "report", icon: FileText, title: "报告生成", subtitle: "生成分析报告文档" },
 ] as const;
 
@@ -47,9 +50,11 @@ export function AnalysisSidebar({
   workspace,
   decisions,
   busy,
+  landscapeProgress,
   artifacts,
   selectedModelId,
   onRunAnalysis,
+  onRunLandscape,
   onGeneratePolicyReport,
   onClose,
 }: Props) {
@@ -63,11 +68,14 @@ export function AnalysisSidebar({
   const shapTop = diagnostics.shap_top ?? [];
   const maxShap = Math.max(...shapTop.map((item) => item.mean_abs_shap), 0);
   const counts = decisionCounts(decisions);
-  const exports = artifacts.filter((item) => item.kind === "analysis" || item.kind === "spatial" || item.kind === "geojson");
+  const exports = artifacts.filter((item) => item.kind === "analysis" || item.kind === "landscape" || item.kind === "spatial" || item.kind === "geojson");
   const reportArtifacts = artifacts.filter((item) => item.kind === "report" && item.mime === "application/pdf");
   const latestReport = reportArtifacts[0];
   const policyDocuments = workspace?.policy_documents ?? [];
   const canGenerateReport = decisions.length > 0 && policyDocuments.length > 0 && !!selectedModelId;
+  const hasAdjustmentCandidates = decisions.some((item) =>
+    ["一级优先调入", "二级优先调入", "建议调出"].includes(item.decision),
+  );
 
   const toggle = (key: DirectoryKey) => {
     setExpandedKey((current) => (current === key ? null : key));
@@ -175,7 +183,7 @@ export function AnalysisSidebar({
                       {exports.slice(0, 4).map((artifact) => (
                         <a href={artifactDownloadUrl(artifact.id)} key={artifact.id}>
                           <Download size={14} />
-                          <span>{artifact.kind === "analysis" ? "下载分析结果" : "下载空间结果"}</span>
+                          <span>{artifact.kind === "analysis" ? "下载分析结果" : artifact.kind === "landscape" ? "下载形态评价结果" : "下载空间结果"}</span>
                         </a>
                       ))}
                     </section>
@@ -186,6 +194,74 @@ export function AnalysisSidebar({
                     <span>{busy ? "正在分析..." : decisions.length ? "重新分析候选地块" : "开始候选地块分析"}</span>
                   </button>
                   {decisions.length > 0 && <p className="analysis-done">分析完成</p>}
+                </div>
+              )}
+
+              {isOpen && item.key === "landscape" && (
+                <div className="directory-body">
+                  <p className="analysis-note">比较候选地块调入或调出前后的六项景观指数，汇总连续完整性、破碎聚合性和边界规整性，并检查孤岛或分裂风险。</p>
+
+                  <section className="analysis-card">
+                    <h3>基准边界</h3>
+                    <div className="status-table">
+                      <div><span>加载状态</span><strong>{workspace?.landscape_boundary.loaded ? "已就绪" : "未加载"}</strong></div>
+                      <div><span>独立斑块</span><strong>{workspace?.landscape_boundary.patch_count ?? 0} 个</strong></div>
+                      <div><span>边界面积</span><strong>{workspace?.landscape_boundary.loaded ? `${workspace.landscape_boundary.area_km2.toFixed(1)} km²` : "—"}</strong></div>
+                      <div><span>分析口径</span><strong>50 m · 8邻域</strong></div>
+                    </div>
+                    {workspace?.landscape_boundary.warnings.map((warning) => (
+                      <p className="analysis-warning" key={warning}>{warning}</p>
+                    ))}
+                  </section>
+
+                  <section className="analysis-card">
+                    <h3>三个评价维度</h3>
+                    <div className="metric-list">
+                      <div><span>连续完整性</span><strong>NP↓ · LPI↑</strong></div>
+                      <div><span>破碎聚合性</span><strong>PD↓ · AI↑</strong></div>
+                      <div><span>边界规整性</span><strong>ED↓ · LSI↓</strong></div>
+                      <div><span>拓扑规则</span><strong>调入孤岛 · 调出分裂</strong></div>
+                    </div>
+                  </section>
+
+                  <button
+                    className="run-analysis-button"
+                    onClick={onRunLandscape}
+                    disabled={busy || !workspace?.has_spatial_data || !workspace?.landscape_boundary.loaded || !hasAdjustmentCandidates}
+                  >
+                    {busy ? <CheckCircle2 size={17} /> : <Play size={17} />}
+                    <span>{busy ? "正在评价..." : "运行边界形态评价"}</span>
+                  </button>
+                  {landscapeProgress && (
+                    <div className={`landscape-progress ${landscapeProgress.status}`} aria-live="polite">
+                      <div className="landscape-progress-heading">
+                        <span>{landscapeProgress.message}</span>
+                        <strong>{landscapeProgress.percent.toFixed(1)}%</strong>
+                      </div>
+                      <div
+                        className="landscape-progress-track"
+                        role="progressbar"
+                        aria-valuemin={0}
+                        aria-valuemax={100}
+                        aria-valuenow={landscapeProgress.percent}
+                      >
+                        <span style={{ width: `${Math.min(100, Math.max(0, landscapeProgress.percent))}%` }} />
+                      </div>
+                      <div className="landscape-progress-meta">
+                        <span>{landscapeProgress.completed} / {landscapeProgress.total} 个候选地块</span>
+                        {landscapeProgress.current_block_id && <span>{landscapeProgress.current_block_id}</span>}
+                      </div>
+                    </div>
+                  )}
+                  {workspace?.has_spatial_data && workspace?.landscape_boundary.loaded && hasAdjustmentCandidates && (
+                    <p className="report-hint">需要评价联动地块时，请进入“地图—形态评价”，点击下拉框旁的“创建组合情景”后多选地块。</p>
+                  )}
+                  {(!workspace?.has_spatial_data || !workspace?.landscape_boundary.loaded) && (
+                    <p className="report-hint">需要先上传候选地块SHP ZIP，以及包含城镇开发边界的约束数据SHP ZIP。</p>
+                  )}
+                  {workspace?.has_spatial_data && workspace?.landscape_boundary.loaded && !hasAdjustmentCandidates && (
+                    <p className="report-hint">请先完成候选地块调入调出分析；形态评价只处理一级优先调入、二级优先调入和建议调出地块。</p>
+                  )}
                 </div>
               )}
 

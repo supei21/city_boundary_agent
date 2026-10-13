@@ -9,6 +9,7 @@ from threading import Thread
 from typing import Any
 
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile
+from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -19,6 +20,8 @@ from backend.schemas import (
     ChatRequest,
     CreateUserModelResponse,
     DatasetPayload,
+    LandscapeEvaluateRequest,
+    LandscapeScenarioEvaluateRequest,
     RagPolicyDocumentDetail,
     RagPolicyDocumentSummary,
     RagPolicySearchResult,
@@ -31,6 +34,7 @@ from backend.policy_report import POLICY_REFERENCE_PDF
 from backend.workspace import DemoWorkspace
 from backend.uploads import UploadTooLargeError, persist_upload
 from boundary_agent.agent.events import AgentEvent
+from boundary_agent.config import load_config
 from boundary_agent.io import parse_csv, parse_json
 from boundary_agent.llm.chat_service import handle_chat
 from boundary_agent.llm.client import get_model_settings, list_model_options
@@ -39,10 +43,12 @@ from boundary_agent.llm.user_models import (
     add_user_model,
     delete_user_model,
 )
-from boundary_agent.config import load_config
 from boundary_agent.rag.config import settings_from_config as rag_settings_from_config
 from boundary_agent.rag.library import get_policy_document, list_policy_library, search_policy_library
-from boundary_agent.spatial import read_shapefile_zip_path
+from boundary_agent.spatial import (
+    read_landscape_boundary_from_constraint_zip,
+    read_shapefile_zip_path,
+)
 
 
 app = FastAPI(
@@ -168,14 +174,103 @@ async def upload_constraint_dataset(file: UploadFile = File(...)) -> WorkspaceSu
     suffix = name.rsplit(".", maxsplit=1)[-1].lower() if "." in name else ""
     if suffix not in {"zip", "json", "geojson"}:
         raise HTTPException(status_code=400, detail="约束数据当前支持SHP ZIP、JSON或GeoJSON")
+    upload_path: Path | None = None
     try:
         upload_path, _ = await persist_upload(file, name)
-        workspace.set_constraint_dataset(name, upload_path)
+        landscape_boundary = (
+            read_landscape_boundary_from_constraint_zip(name, upload_path)
+            if suffix == "zip"
+            else None
+        )
+        workspace.set_constraint_dataset(name, upload_path, landscape_boundary)
     except UploadTooLargeError as exc:
         raise HTTPException(status_code=413, detail=str(exc)) from exc
     except (ValueError, TypeError, json.JSONDecodeError, zipfile.BadZipFile) as exc:
+        if upload_path is not None:
+            upload_path.unlink(missing_ok=True)
         raise HTTPException(status_code=422, detail=f"约束数据解析失败：{exc}") from exc
     return workspace.summary()
+
+
+@app.get("/api/landscape/boundary/geojson")
+def get_landscape_boundary_geojson() -> dict[str, Any]:
+    try:
+        return workspace.landscape_boundary_geojson()
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/api/landscape/evaluate")
+def evaluate_landscape(payload: LandscapeEvaluateRequest) -> dict[str, Any]:
+    try:
+        return workspace.evaluate_landscape(
+            block_ids=payload.block_ids,
+            block_actions=payload.block_actions,
+            action=payload.action,
+            neighborhood_m=payload.neighborhood_m,
+            cell_size_m=payload.cell_size_m,
+            connectivity=payload.connectivity,
+            limit=payload.limit,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.post("/api/landscape/evaluate/stream")
+async def stream_landscape_evaluation(payload: LandscapeEvaluateRequest) -> StreamingResponse:
+    """Stream per-block morphology progress followed by the completed result."""
+
+    event_queue: Queue[object] = Queue()
+
+    def publish(progress: dict[str, Any]) -> None:
+        event_queue.put({"type": "progress", "progress": progress})
+
+    def run() -> None:
+        try:
+            result = workspace.evaluate_landscape(
+                block_ids=payload.block_ids,
+                block_actions=payload.block_actions,
+                action=payload.action,
+                neighborhood_m=payload.neighborhood_m,
+                cell_size_m=payload.cell_size_m,
+                connectivity=payload.connectivity,
+                limit=payload.limit,
+                progress_callback=publish,
+            )
+            event_queue.put({"type": "result", "result": jsonable_encoder(result)})
+        except Exception as exc:
+            event_queue.put({"type": "error", "message": f"边界形态评价失败：{exc}"})
+        finally:
+            event_queue.put(_STREAM_END)
+
+    Thread(target=run, daemon=True).start()
+
+    async def generate():
+        while True:
+            item = await asyncio.to_thread(event_queue.get)
+            if item is _STREAM_END:
+                break
+            yield json.dumps(item, ensure_ascii=False) + "\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="application/x-ndjson",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/api/landscape/scenario/evaluate")
+def evaluate_landscape_scenario(payload: LandscapeScenarioEvaluateRequest) -> dict[str, Any]:
+    try:
+        return workspace.evaluate_landscape_scenario(
+            block_ids=payload.block_ids,
+            action=payload.action,
+            neighborhood_m=payload.neighborhood_m,
+            cell_size_m=payload.cell_size_m,
+            connectivity=payload.connectivity,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @app.post("/api/policies/upload", response_model=WorkspaceSummary)
@@ -312,6 +407,13 @@ async def stream_chat(request: ChatRequest) -> StreamingResponse:
     def publish(event: AgentEvent) -> None:
         event_queue.put({"type": "process", "event": event.model_dump()})
 
+    def evaluate_landscape_with_progress(**kwargs: Any) -> dict[str, Any]:
+        kwargs["progress_callback"] = lambda progress: event_queue.put({
+            "type": "landscape_progress",
+            "progress": progress,
+        })
+        return workspace.evaluate_landscape(**kwargs)
+
     def run() -> None:
         try:
             result = handle_chat(
@@ -319,13 +421,21 @@ async def stream_chat(request: ChatRequest) -> StreamingResponse:
                 blocks_snapshot,
                 settings=model_settings,
                 event_callback=publish,
+                landscape_evaluator=evaluate_landscape_with_progress,
+                latest_analysis_provider=workspace.get_latest_analysis_payload,
             )
             payload = result.model_dump(mode="json")
             payload["model_id"] = request.model_id
             payload["model_name"] = model_option["label"]
-            artifact = None
+            analysis_artifact = None
             if payload["decisions"] or payload["block_records"]:
-                artifact = workspace.add_analysis(payload)
+                analysis_artifact = workspace.add_analysis(payload)
+            landscape_artifact = (payload.get("landscape_evaluation") or {}).get("artifact")
+            artifact = (
+                ArtifactSummary.model_validate(landscape_artifact)
+                if isinstance(landscape_artifact, dict)
+                else analysis_artifact
+            )
             for chunk in _stream_text_chunks(str(payload.get("response") or "")):
                 event_queue.put({"type": "answer_delta", "content": chunk})
             event_queue.put(

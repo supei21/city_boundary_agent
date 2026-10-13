@@ -22,7 +22,7 @@ class ModelOption(BaseModel):
 class ArtifactSummary(BaseModel):
     id: str
     name: str
-    kind: Literal["dataset", "analysis", "spatial", "geojson", "report", "pdf"]
+    kind: Literal["dataset", "analysis", "landscape", "spatial", "geojson", "report", "pdf"]
     mime: str
     size: int
     created_at: str
@@ -38,6 +38,18 @@ class ConstraintDatasetSummary(BaseModel):
     layer_count: int = 0
     layers: list[str] = Field(default_factory=list)
     uploaded_at: str | None = None
+    warnings: list[str] = Field(default_factory=list)
+
+
+class LandscapeBoundarySummary(BaseModel):
+    loaded: bool = False
+    name: str | None = None
+    source_crs: str | None = None
+    analysis_crs: str | None = None
+    source_geometry_type: str | None = None
+    source_feature_count: int = 0
+    patch_count: int = 0
+    area_km2: float = 0
     warnings: list[str] = Field(default_factory=list)
 
 
@@ -58,6 +70,7 @@ class WorkspaceSummary(BaseModel):
     has_spatial_data: bool = False
     dataset_warnings: list[str] = Field(default_factory=list)
     constraint_dataset: ConstraintDatasetSummary = Field(default_factory=ConstraintDatasetSummary)
+    landscape_boundary: LandscapeBoundarySummary = Field(default_factory=LandscapeBoundarySummary)
     policy_documents: list[PolicyDocumentSummary] = Field(default_factory=list)
     model_diagnostics: dict[str, Any] = Field(default_factory=dict)
     model_ready: bool
@@ -117,6 +130,24 @@ class CreateUserModelResponse(BaseModel):
 
 class ReportGenerateRequest(BaseModel):
     model_id: str = Field(default="default", min_length=1, max_length=80)
+
+
+class LandscapeEvaluateRequest(BaseModel):
+    block_ids: list[str] = Field(default_factory=list)
+    block_actions: dict[str, Literal["include", "exclude"]] = Field(default_factory=dict)
+    action: Literal["include", "exclude", "auto"] = "auto"
+    neighborhood_m: float | None = Field(default=None, ge=200, le=5000)
+    cell_size_m: float | None = Field(default=None, ge=5, le=200)
+    connectivity: Literal[4, 8] | None = None
+    limit: int | None = Field(default=None, ge=1)
+
+
+class LandscapeScenarioEvaluateRequest(BaseModel):
+    block_ids: list[str] = Field(min_length=1)
+    action: Literal["include", "exclude"]
+    neighborhood_m: float | None = Field(default=None, ge=200, le=5000)
+    cell_size_m: float | None = Field(default=None, ge=5, le=200)
+    connectivity: Literal[4, 8] | None = None
 
 
 class RagPolicyDocumentSummary(BaseModel):

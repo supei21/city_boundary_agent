@@ -43,6 +43,7 @@ export function LeftSidebar({
   const constraintDataset = workspace?.constraint_dataset;
   const hasConstraints = !!constraintDataset?.loaded;
   const constraintWarnings = constraintDataset?.warnings ?? [];
+  const landscapeBoundary = workspace?.landscape_boundary;
   const activeModel = workspace?.models.find((model) => model.id === selectedModelId);
   const isLlmModel = activeModel?.kind === "llm";
 
@@ -72,7 +73,7 @@ export function LeftSidebar({
             <ShieldCheck size={17} />
             {!collapsed && <span>上传约束数据</span>}
           </button>
-          {!collapsed && <p className="sidebar-hint">候选地块：SHP / ZIP / GeoJSON / CSV；约束数据：SHP ZIP / GeoJSON</p>}
+          {!collapsed && <p className="sidebar-hint">约束数据请将城镇开发边界、生态保护红线和永久基本农田等完整SHP放入同一个ZIP；开发边界支持闭合线或面。</p>}
           <input
             ref={uploadRef}
             type="file"
@@ -127,6 +128,13 @@ export function LeftSidebar({
                   {constraintWarnings.map((warning) => <p key={warning}>{warning}</p>)}
                 </details>
               )}
+              {landscapeBoundary?.loaded && (
+                <div className="constraint-summary">
+                  <span className="eyebrow">形态评价基准边界</span>
+                  <strong title={landscapeBoundary.name ?? ""}>{landscapeBoundary.name}</strong>
+                  <small>{landscapeBoundary.patch_count} 个斑块 · {landscapeBoundary.area_km2.toFixed(1)} km²</small>
+                </div>
+              )}
             </div>
           )}
         </section>
@@ -141,7 +149,7 @@ export function LeftSidebar({
             <div className="dataset-list">
               <div><StatusDot active={hasBlocks} /><span>街区基础数据</span><em>{hasBlocks ? "已加载" : "未加载"}</em></div>
               <div><StatusDot active={hasGeometry} /><span>空间几何</span><em>{hasGeometry ? "已加载" : "未加载"}</em></div>
-              <div><StatusDot active={!!constraintDataset?.layers.includes("城镇开发边界")} partial={hasConstraints} /><span>城镇开发边界</span><em>{constraintDataset?.layers.includes("城镇开发边界") ? "已加载" : hasConstraints ? "待识别" : "未加载"}</em></div>
+              <div><StatusDot active={!!landscapeBoundary?.loaded} /><span>城镇开发边界</span><em>{landscapeBoundary?.loaded ? "形态评价可用" : "未加载"}</em></div>
               <div><StatusDot active={!!constraintDataset?.layers.includes("生态保护红线")} partial={hasConstraints} /><span>生态保护红线</span><em>{constraintDataset?.layers.includes("生态保护红线") ? "已加载" : hasConstraints ? "待识别" : "未加载"}</em></div>
               <div><StatusDot active={!!constraintDataset?.layers.includes("永久基本农田")} partial={hasConstraints} /><span>永久基本农田</span><em>{constraintDataset?.layers.includes("永久基本农田") ? "已加载" : hasConstraints ? "待识别" : "未加载"}</em></div>
               <div><StatusDot active={false} /><span>地质灾害数据</span><em>未单独加载</em></div>
@@ -160,6 +168,7 @@ export function LeftSidebar({
               <div><span>街区数据</span><strong>{hasBlocks ? "已加载" : "未加载"}</strong></div>
               <div><span>空间几何</span><strong>{hasGeometry ? "已加载" : "未加载"}</strong></div>
               <div><span>约束数据</span><strong>{hasConstraints ? `${constraintDataset?.layer_count ?? 0} 图层` : "未加载"}</strong></div>
+              <div><span>形态评价</span><strong>{landscapeBoundary?.loaded ? "边界已就绪" : "未就绪"}</strong></div>
               <div><span>模型特征</span><strong>{workspace?.model_diagnostics?.available ? "可读取" : "未就绪"}</strong></div>
             </div>
           )}

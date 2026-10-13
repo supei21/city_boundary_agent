@@ -45,6 +45,29 @@ trained_model:
   probability_field: development_probability
   note: 数据包有 dev_score 时直接使用；没有时读取项目内 XGBoost 模型生成开发概率。
 
+landscape:
+  # 兼容旧请求参数；完整边界评价不再使用候选地块局部邻域。
+  neighborhood_m: 1500
+  cell_size_m: 50
+  connectivity: 8
+  # 以街区为最小评价单元；300米内还需通过逐对局部闭合验证，能够形成连续面的线性间隙才视为连通，尖角近邻不强制连接。
+  adjacency_tolerance_m: 300.0
+  # ED、LSI及组合方案PD采用相对变化率：0.05%以下稳定，0.5%以上明显。
+  stable_relative_threshold: 0.0005
+  significant_relative_threshold: 0.005
+  # 单地块PD使用更适合街区尺度的阈值：0.005%以下稳定，0.1%以上明显。
+  single_stable_pd_relative_threshold: 0.00005
+  single_significant_pd_relative_threshold: 0.001
+  # LPI及组合方案AI采用百分点变化：0.01以下稳定，0.1以上明显。
+  stable_percentage_point_threshold: 0.01
+  significant_percentage_point_threshold: 0.1
+  # 单地块AI使用街区尺度阈值：0.001个百分点以下稳定，0.02个百分点以上明显。
+  single_stable_ai_percentage_point_threshold: 0.001
+  single_significant_ai_percentage_point_threshold: 0.02
+  # NP变化1个为轻微，达到2个为明显。
+  significant_np_change: 2
+  note: 形态评价将调入调出地块实际作用于完整城镇开发边界，对300米内相邻面逐对执行局部闭合验证，仅填补能够形成连续面的街区线性间隙，并以同一规划评价几何统一开展拓扑检查及计算NP、PD、LPI、ED、LSI和AI；单地块PD采用0.005%/0.1%阈值，AI采用0.001/0.02个百分点阈值，NP、LPI、ED、LSI以及组合方案全部指标沿用原阈值；实际调入调出面积仍按原始几何统计，行政边界和局部窗口不参与计算。
+
 scales:
   road_density_high: 8.0
   transport_poi_high: 20

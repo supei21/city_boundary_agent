@@ -3,10 +3,13 @@ import type { CSSProperties } from "react";
 import type { FeatureCollection } from "geojson";
 
 import {
+  evaluateLandscapeScenario,
   generatePolicyReport,
   getArtifact,
+  getLandscapeBoundaryGeoJson,
   getWorkspace,
   resetWorkspace,
+  streamLandscapeEvaluation,
   streamChat,
   uploadConstraintDataset,
   uploadDataset,
@@ -25,6 +28,9 @@ import type {
   ArtifactSummary,
   ChatMessage,
   Decision,
+  LandscapeEvaluation,
+  LandscapeProgress,
+  LandscapeScenarioEvaluation,
   MainTabId,
   StreamPacket,
   WorkspaceSummary,
@@ -53,7 +59,11 @@ export default function App() {
   const [artifactDetail, setArtifactDetail] = useState<ArtifactDetail | null>(null);
   const [activeTab, setActiveTab] = useState<MainTabId>("chat");
   const [mapData, setMapData] = useState<FeatureCollection | null>(null);
+  const [boundaryMapData, setBoundaryMapData] = useState<FeatureCollection | null>(null);
   const [lastDecisions, setLastDecisions] = useState<Decision[]>([]);
+  const [landscapeEvaluation, setLandscapeEvaluation] = useState<LandscapeEvaluation | null>(null);
+  const [landscapeScenarioEvaluation, setLandscapeScenarioEvaluation] = useState<LandscapeScenarioEvaluation | null>(null);
+  const [landscapeProgress, setLandscapeProgress] = useState<LandscapeProgress | null>(null);
   const [dataVersion, setDataVersion] = useState(0);
 
   const latestPolicyReport = workspace?.artifacts.find((item) => (
@@ -98,6 +108,27 @@ export default function App() {
       setActiveTab((tab) => (tab === "map" ? "chat" : tab));
     }
   }, [workspace?.has_spatial_data]);
+
+  useEffect(() => {
+    if (!workspace?.landscape_boundary.loaded) {
+      setBoundaryMapData(null);
+      return;
+    }
+    let cancelled = false;
+    getLandscapeBoundaryGeoJson()
+      .then((boundary) => {
+        if (!cancelled) setBoundaryMapData(boundary);
+      })
+      .catch(() => {
+        if (!cancelled) setBoundaryMapData(null);
+      });
+    return () => { cancelled = true; };
+  }, [
+    workspace?.landscape_boundary.loaded,
+    workspace?.landscape_boundary.name,
+    workspace?.landscape_boundary.area_km2,
+    workspace?.landscape_boundary.patch_count,
+  ]);
 
   useEffect(() => {
     if (!resizing) return;
@@ -153,6 +184,8 @@ export default function App() {
               packet.event,
             ],
           }));
+        } else if (packet.type === "landscape_progress") {
+          setLandscapeProgress(packet.progress);
         } else if (packet.type === "answer_delta") {
           updateAssistant(assistantId, (message) => ({
             ...message,
@@ -166,7 +199,15 @@ export default function App() {
             pending: false,
             events: (message.events ?? []).map((event) => event.status === "running" ? { ...event, status: "completed" as const } : event),
           }));
-          setLastDecisions(packet.result.decisions ?? []);
+          if (packet.result.decisions?.length) {
+            setLastDecisions(packet.result.decisions);
+          }
+          if (packet.result.landscape_evaluation) {
+            setLandscapeEvaluation(packet.result.landscape_evaluation);
+          } else if (packet.result.decisions?.length) {
+            setLandscapeEvaluation(null);
+            setLandscapeScenarioEvaluation(null);
+          }
           if (packet.artifact) selectArtifact(packet.artifact);
         } else {
           updateAssistant(assistantId, (message) => ({ ...message, content: packet.message, pending: false, error: true }));
@@ -186,6 +227,10 @@ export default function App() {
     try {
       const next = await uploadDataset(file);
       setWorkspace(next);
+      setLastDecisions([]);
+      setLandscapeEvaluation(null);
+      setLandscapeScenarioEvaluation(null);
+      setLandscapeProgress(null);
       setDataVersion((version) => version + 1);
       const uploaded = next.artifacts[0];
       if (uploaded) selectArtifact(uploaded);
@@ -213,7 +258,11 @@ export default function App() {
     try {
       const next = await uploadConstraintDataset(file);
       setWorkspace(next);
+      setLandscapeEvaluation(null);
+      setLandscapeScenarioEvaluation(null);
+      setLandscapeProgress(null);
       const constraint = next.constraint_dataset;
+      const boundary = next.landscape_boundary;
       setMessages((current) => [
         ...current,
         {
@@ -222,6 +271,9 @@ export default function App() {
           content: [
             `已加载约束数据 **${file.name}**，识别到 ${constraint.layer_count} 个约束图层。`,
             constraint.layers.length ? `图层：${constraint.layers.join("、")}` : "",
+            boundary.loaded
+              ? `已将其中的城镇开发边界设为统一分析基准：${boundary.patch_count} 个斑块，约 ${boundary.area_km2.toFixed(2)} km²；现在可用于调入调出判定和形态评价。`
+              : "未识别到城镇开发边界，形态评价暂不可用。",
             ...constraint.warnings.map((warning) => `- ${warning}`),
           ].filter(Boolean).join("\n"),
         },
@@ -229,6 +281,161 @@ export default function App() {
     } catch (error) {
       const message = error instanceof Error ? error.message : "未知错误";
       setMessages((current) => [...current, { id: crypto.randomUUID(), role: "assistant", content: `约束数据上传失败：${message}`, error: true }]);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleLandscapeAnalysis = async () => {
+    if (busy || !workspace?.has_spatial_data || !workspace.landscape_boundary.loaded) return;
+    const selected = [...lastDecisions]
+      .filter((item) => ["一级优先调入", "二级优先调入", "建议调出"].includes(item.decision))
+      .sort((left, right) => {
+        const leftRank = left.rank_city ?? Number.MAX_SAFE_INTEGER;
+        const rightRank = right.rank_city ?? Number.MAX_SAFE_INTEGER;
+        return leftRank - rightRank
+          || right.dynamic_score - left.dynamic_score
+          || left.block_id.localeCompare(right.block_id);
+      });
+    if (!selected.length) {
+      setActiveTab("chat");
+      setMessages((current) => [...current, {
+        id: crypto.randomUUID(),
+        role: "assistant",
+        content: "最近一次候选地块分析中没有一级优先调入、二级优先调入或建议调出地块。请先完成调入调出分析，再运行边界形态评价。",
+        error: true,
+      }]);
+      return;
+    }
+    const blockActions = Object.fromEntries(selected.map((item) => [
+      item.block_id,
+      item.decision === "建议调出" ? "exclude" : "include",
+    ])) as Record<string, "include" | "exclude">;
+    const userMessage: ChatMessage = {
+      id: crypto.randomUUID(),
+      role: "user",
+      content: `请对最近一次调入调出分析中的全部 ${selected.length} 个候选地块运行边界形态评价。`,
+    };
+    const assistantId = crypto.randomUUID();
+    setActiveTab("chat");
+    setMessages((current) => [...current, userMessage, {
+      id: assistantId,
+      role: "assistant",
+      content: "",
+      pending: true,
+      events: [{
+        phase: "action",
+        title: "运行边界形态评价工具",
+        detail: `正在对全部 ${selected.length} 个调入调出候选逐地块计算六项景观指数，并检查孤岛和分裂风险。`,
+        status: "running",
+        metadata: { metric_count: 6 },
+      }],
+    }]);
+    setBusy(true);
+    setLandscapeProgress({
+      phase: "preparing",
+      status: "running",
+      completed: 0,
+      total: selected.length,
+      evaluated_count: 0,
+      percent: 0,
+      current_block_id: null,
+      message: "正在准备开发边界和候选地块",
+    });
+    try {
+      const result = await streamLandscapeEvaluation({
+        block_ids: selected.map((item) => item.block_id),
+        block_actions: blockActions,
+        action: "auto",
+      }, setLandscapeProgress);
+      setLandscapeEvaluation(result);
+      const top = [...result.results]
+        .sort((left, right) => right.demo_shape_score - left.demo_shape_score)
+        .slice(0, 5);
+      const lines = [
+        `已完成 **${result.summary.evaluated_count}** 个地块的边界形态评价。`,
+        `明显改善 ${result.summary.grade_counts.significantly_improved} 个、轻微改善 ${result.summary.grade_counts.slightly_improved} 个、基本稳定 ${result.summary.grade_counts.stable} 个、轻微恶化 ${result.summary.grade_counts.slightly_worsened} 个、明显恶化 ${result.summary.grade_counts.significantly_worsened} 个。`,
+        "",
+        ...top.map((item) => `- **${item.block_id}**（${item.action_label}）：${item.overall_label}；${item.conclusion}`),
+        "",
+        result.summary.note,
+      ];
+      updateAssistant(assistantId, (message) => ({
+        ...message,
+        content: lines.join("\n"),
+        pending: false,
+        events: [
+          ...(message.events ?? []).map((event) => ({ ...event, status: "completed" as const })),
+          {
+            phase: "observe",
+            title: "形成形态评价结果",
+            detail: `已输出 ${result.summary.evaluated_count} 个地块的六项指数、三维评价和拓扑检查结果。`,
+            status: "completed",
+            metadata: result.summary,
+          },
+        ],
+      }));
+      const next = await refreshWorkspace();
+      const artifact = next.artifacts.find((item) => item.id === result.artifact.id) ?? result.artifact;
+      selectArtifact(artifact);
+      setPreviewOpen(true);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "未知错误";
+      setLandscapeProgress((current) => ({
+        phase: "error",
+        status: "error",
+        completed: current?.completed ?? 0,
+        total: current?.total ?? selected.length,
+        evaluated_count: current?.evaluated_count ?? 0,
+        percent: current?.percent ?? 0,
+        current_block_id: current?.current_block_id ?? null,
+        message,
+      }));
+      updateAssistant(assistantId, (item) => ({
+        ...item,
+        content: `边界形态评价失败：${message}`,
+        pending: false,
+        error: true,
+        events: (item.events ?? []).map((event) => ({ ...event, status: "error" as const })),
+      }));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleClearLandscapeScenario = useCallback(() => {
+    setLandscapeScenarioEvaluation(null);
+  }, []);
+
+  const handleLandscapeScenario = async (blockIds: string[], action: "include" | "exclude") => {
+    if (busy || !blockIds.length || !workspace?.has_spatial_data || !workspace.landscape_boundary.loaded) return;
+    setLandscapeScenarioEvaluation(null);
+    setBusy(true);
+    try {
+      const result = await evaluateLandscapeScenario({ block_ids: blockIds, action });
+      setLandscapeScenarioEvaluation(result);
+      setMessages((current) => [...current, {
+        id: crypto.randomUUID(),
+        role: "assistant",
+        content: [
+          `已完成所选 **${result.summary.selected_count}** 个地块的${result.summary.action_label}组合情景评价。`,
+          `总体结论：**${result.summary.overall_label}**。`,
+          `组合拓扑：**${result.scenario.topology_check.label}**；${result.scenario.topology_check.message}`,
+          result.scenario.conclusion,
+        ].join("\n\n"),
+      }]);
+      const next = await refreshWorkspace();
+      const artifact = next.artifacts.find((item) => item.id === result.artifact.id) ?? result.artifact;
+      setSelectedArtifact(artifact);
+      setActiveTab("map");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "未知错误";
+      setMessages((current) => [...current, {
+        id: crypto.randomUUID(),
+        role: "assistant",
+        content: `组合情景评价失败：${message}`,
+        error: true,
+      }]);
     } finally {
       setBusy(false);
     }
@@ -341,7 +548,11 @@ export default function App() {
       setArtifactDetail(null);
       setActiveTab("chat");
       setMapData(null);
+      setBoundaryMapData(null);
       setLastDecisions([]);
+      setLandscapeEvaluation(null);
+      setLandscapeScenarioEvaluation(null);
+      setLandscapeProgress(null);
       setDataVersion((version) => version + 1);
     } finally {
       setBusy(false);
@@ -401,6 +612,7 @@ export default function App() {
               datasetName={workspace?.dataset_name ?? ""}
               blockCount={workspace?.block_count ?? 0}
               decisions={lastDecisions}
+              landscapeEvaluation={landscapeEvaluation}
               dataVersion={dataVersion}
             />
           </div>
@@ -409,7 +621,15 @@ export default function App() {
           </div>
           {activeTab === "map" && !!workspace?.has_spatial_data && (
             <div className="main-tab-panel">
-              <MapView data={mapData} />
+              <MapView
+                data={mapData}
+                boundaryData={boundaryMapData}
+                landscapeEvaluation={landscapeEvaluation}
+                landscapeScenarioEvaluation={landscapeScenarioEvaluation}
+                busy={busy}
+                onRunScenario={handleLandscapeScenario}
+                onClearScenario={handleClearLandscapeScenario}
+              />
             </div>
           )}
         </div>
@@ -425,9 +645,11 @@ export default function App() {
         workspace={workspace}
         decisions={lastDecisions}
         busy={busy}
+        landscapeProgress={landscapeProgress}
         artifacts={workspace?.artifacts ?? []}
         selectedModelId={selectedModelId}
         onRunAnalysis={() => handleSend("哪些街区适合调入开发边界？")}
+        onRunLandscape={handleLandscapeAnalysis}
         onGeneratePolicyReport={handlePolicyReportGenerate}
         onClose={() => setPreviewOpen(false)}
       />
