@@ -55,8 +55,6 @@ export function extractRows(value: unknown): Record<string, unknown>[] {
 
 export function extractSpatial(value: unknown): FeatureCollection | null {
   if (!isRecord(value)) return null;
-  // Landscape result geometry is consumed by the boundary-map overlay and must
-  // not replace the main analysis map when its artifact is opened for preview.
   if (value.type === "landscape_analysis" || value.type === "landscape_scenario_analysis") return null;
   const candidate = isRecord(value.spatial) ? value.spatial : value;
   if (candidate.type !== "FeatureCollection" || !Array.isArray(candidate.features)) return null;

@@ -73,7 +73,7 @@ export function LeftSidebar({
             <ShieldCheck size={17} />
             {!collapsed && <span>上传约束数据</span>}
           </button>
-          {!collapsed && <p className="sidebar-hint">约束数据请将城镇开发边界、生态保护红线和永久基本农田等完整SHP放入同一个ZIP；开发边界支持闭合线或面。</p>}
+          {!collapsed && <p className="sidebar-hint">候选地块：SHP / ZIP / GeoJSON / CSV；约束数据：SHP ZIP / GeoJSON</p>}
           <input
             ref={uploadRef}
             type="file"

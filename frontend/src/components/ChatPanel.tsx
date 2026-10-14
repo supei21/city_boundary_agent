@@ -21,6 +21,7 @@ interface Props {
   selectedModelId: string;
   onModelChange: (modelId: string) => void;
   onAddModel: () => void;
+  onDeleteModel: (modelId: string) => void;
   onSend: (prompt: string, modelId: string) => void;
   onOpenPreview: () => void;
 }
@@ -33,6 +34,7 @@ export function ChatPanel({
   selectedModelId,
   onModelChange,
   onAddModel,
+  onDeleteModel,
   onSend,
   onOpenPreview,
 }: Props) {
@@ -115,6 +117,7 @@ export function ChatPanel({
               disabled={busy}
               onChange={onModelChange}
               onAddModel={onAddModel}
+              onDeleteModel={onDeleteModel}
             />
             <button type="submit" className="send-button" disabled={!draft.trim() || busy || !selectedModelId} title="发送">
               <Send size={17} />

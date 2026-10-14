@@ -43,6 +43,13 @@ export interface LandscapeBoundarySummary {
   warnings: string[];
 }
 
+export type LandscapeGrade =
+  | "significantly_improved"
+  | "slightly_improved"
+  | "stable"
+  | "slightly_worsened"
+  | "significantly_worsened";
+
 export interface LandscapeResult {
   block_id: string;
   block_name?: string | null;
@@ -100,13 +107,6 @@ export interface LandscapeResult {
   conclusion: string;
 }
 
-export type LandscapeGrade =
-  | "significantly_improved"
-  | "slightly_improved"
-  | "stable"
-  | "slightly_worsened"
-  | "significantly_worsened";
-
 export interface LandscapeEvaluation {
   type: "landscape_analysis";
   boundary: LandscapeBoundarySummary;
@@ -132,6 +132,19 @@ export interface LandscapeProgress {
   evaluated_count: number;
   percent: number;
   current_block_id?: string | null;
+  message: string;
+}
+
+export interface PolicyFeasibilityProgress {
+  phase: "preparing" | "retrieving" | "analyzing" | "completed" | "error";
+  status: "running" | "completed" | "error";
+  processed: number;
+  completed: number;
+  failed: number;
+  total: number;
+  percent: number;
+  current_batch?: number | null;
+  total_batches?: number | null;
   message: string;
 }
 
@@ -214,7 +227,7 @@ export interface WorkspaceSummary {
   artifacts: ArtifactSummary[];
 }
 
-export type MainTabId = "chat" | "data" | "map" | "policy";
+export type MainTabId = "chat" | "data" | "map" | "policy" | "policy_qa" | "policy_feasibility";
 
 export interface DatasetPayload {
   name: string;
@@ -225,6 +238,13 @@ export interface DatasetPayload {
   limit: number;
   has_more: boolean;
   blocks: Record<string, unknown>[];
+}
+
+export interface CandidateParcelPayload {
+  available: boolean;
+  analysis_required: boolean;
+  count: number;
+  parcels: Record<string, unknown>[];
 }
 
 export interface AgentEvent {
@@ -328,4 +348,52 @@ export interface RagPolicySearchResult {
   rule_id?: string | null;
   article_ref?: string | null;
   excerpt: string;
+}
+
+export interface RagQuestionResponse {
+  answer: string;
+  mode: string;
+  best_score: number;
+  sources: RagPolicySearchResult[];
+}
+
+export interface PolicyFeasibilityResponse {
+  tool_name: string;
+  tool_version: string;
+  parcel_id: string;
+  policy_analysis: Record<string, unknown>;
+  hard_constraint_analysis: Record<string, unknown>;
+  retrieval: Record<string, unknown>;
+  parcel_context: {
+    block_id?: string;
+    block_name?: string | null;
+    groups?: Record<string, { field: string; label: string; value: unknown; unit: string }[]>;
+    available_field_count?: number;
+    text?: string;
+  };
+  answer: string;
+}
+
+export interface PolicyBatchValidationResponse {
+  tool_name: string;
+  tool_version: string;
+  total: number;
+  passed: number;
+  pass_rate: number;
+  gate_match_rate: number | null;
+  evidence_valid_rate: number;
+  input_valid_rate: number;
+  results: Record<string, unknown>[];
+  report: string;
+}
+
+export interface CandidatePolicyAnalysisResponse {
+  total: number;
+  completed: number;
+  failed: number;
+  results: Record<string, unknown>[];
+  decisions: Decision[];
+  report: string;
+  spatial: FeatureCollection | null;
+  artifact: ArtifactSummary | null;
 }

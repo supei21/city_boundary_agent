@@ -81,7 +81,7 @@ def decide(
     if constraint.policy_compliance in {"有条件符合", "依据不足"}:
         risks.append(f"政策合规性：{constraint.policy_compliance}")
     if constraint.missing_constraints:
-        risks.append("规划约束信息不完整")
+        risks.extend(constraint.missing_constraints)
     if constraint.policy_warning:
         risks.append(constraint.policy_warning)
     if suitability.missing_dimensions:

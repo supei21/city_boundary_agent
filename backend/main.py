@@ -17,6 +17,9 @@ from fastapi.staticfiles import StaticFiles
 from backend.schemas import (
     ArtifactDetail,
     ArtifactSummary,
+    CandidateParcelPayload,
+    CandidatePolicyAnalysisRequest,
+    CandidatePolicyAnalysisResponse,
     ChatRequest,
     CreateUserModelResponse,
     DatasetPayload,
@@ -25,6 +28,12 @@ from backend.schemas import (
     RagPolicyDocumentDetail,
     RagPolicyDocumentSummary,
     RagPolicySearchResult,
+    RagQuestionRequest,
+    RagQuestionResponse,
+    PolicyFeasibilityRequest,
+    PolicyFeasibilityResponse,
+    PolicyBatchValidationRequest,
+    PolicyBatchValidationResponse,
     ReportGenerateRequest,
     UserModelInput,
     UserModelOutput,
@@ -34,7 +43,6 @@ from backend.policy_report import POLICY_REFERENCE_PDF
 from backend.workspace import DemoWorkspace
 from backend.uploads import UploadTooLargeError, persist_upload
 from boundary_agent.agent.events import AgentEvent
-from boundary_agent.config import load_config
 from boundary_agent.io import parse_csv, parse_json
 from boundary_agent.llm.chat_service import handle_chat
 from boundary_agent.llm.client import get_model_settings, list_model_options
@@ -43,9 +51,17 @@ from boundary_agent.llm.user_models import (
     add_user_model,
     delete_user_model,
 )
+from boundary_agent.config import load_config
 from boundary_agent.rag.config import settings_from_config as rag_settings_from_config
 from boundary_agent.rag.library import get_policy_document, list_policy_library, search_policy_library
+from boundary_agent.rag.policy_service import (
+    answer_policy_question,
+    analyze_candidate_policy_feasibility,
+    analyze_policy_feasibility,
+    validate_policy_feasibility_batch,
+)
 from boundary_agent.spatial import (
+    read_arcgis_feature_set,
     read_landscape_boundary_from_constraint_zip,
     read_shapefile_zip_path,
 )
@@ -107,6 +123,11 @@ def get_dataset(
     return workspace.dataset_payload(offset=offset, limit=limit, query=q)
 
 
+@app.get("/api/candidates", response_model=CandidateParcelPayload)
+def get_candidate_parcels() -> CandidateParcelPayload:
+    return workspace.candidate_parcels()
+
+
 @app.post("/api/workspace/reset", response_model=WorkspaceSummary)
 def reset_workspace() -> WorkspaceSummary:
     workspace.reset()
@@ -158,7 +179,15 @@ async def upload_dataset(file: UploadFile = File(...)) -> WorkspaceSummary:
             workspace.set_spatial_dataset(dataset, upload_path)
             return workspace.summary()
         content = await file.read()
-        blocks = parse_json(content) if suffix == "json" else parse_csv(content)
+        if suffix == "json":
+            parsed = json.loads(content.decode("utf-8-sig"))
+            if isinstance(parsed, dict) and isinstance(parsed.get("features"), list) and parsed.get("geometryType"):
+                dataset = read_arcgis_feature_set(name, content)
+                workspace.set_spatial_dataset(dataset, dataset.source_path)
+                return workspace.summary()
+            blocks = parse_json(content)
+        else:
+            blocks = parse_csv(content)
     except UploadTooLargeError as exc:
         raise HTTPException(status_code=413, detail=str(exc)) from exc
     except (ValueError, TypeError, json.JSONDecodeError, zipfile.BadZipFile) as exc:
@@ -218,8 +247,6 @@ def evaluate_landscape(payload: LandscapeEvaluateRequest) -> dict[str, Any]:
 
 @app.post("/api/landscape/evaluate/stream")
 async def stream_landscape_evaluation(payload: LandscapeEvaluateRequest) -> StreamingResponse:
-    """Stream per-block morphology progress followed by the completed result."""
-
     event_queue: Queue[object] = Queue()
 
     def publish(progress: dict[str, Any]) -> None:
@@ -337,6 +364,132 @@ def search_rag_policies(
 ) -> list[RagPolicySearchResult]:
     settings = rag_settings_from_config(load_config())
     return [RagPolicySearchResult(**item) for item in search_policy_library(settings, q, limit)]
+
+
+@app.post("/api/rag/ask", response_model=RagQuestionResponse)
+def ask_rag_question(payload: RagQuestionRequest) -> RagQuestionResponse:
+    settings = rag_settings_from_config(load_config())
+    try:
+        model_settings = get_model_settings(payload.model_id)
+        result = answer_policy_question(payload.question, settings, model_settings)
+    except (FileNotFoundError, ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return RagQuestionResponse(**result)
+
+
+@app.post("/api/rag/feasibility", response_model=PolicyFeasibilityResponse)
+def analyze_rag_feasibility(payload: PolicyFeasibilityRequest) -> PolicyFeasibilityResponse:
+    settings = rag_settings_from_config(load_config())
+    try:
+        model_settings = get_model_settings(payload.model_id)
+        parcel = workspace.enrich_parcel_attributes(payload.parcel)
+        result = analyze_policy_feasibility(parcel, settings, model_settings)
+    except (FileNotFoundError, ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return PolicyFeasibilityResponse(**result)
+
+
+@app.post("/api/rag/feasibility/batch", response_model=PolicyBatchValidationResponse)
+def validate_rag_feasibility_batch(payload: PolicyBatchValidationRequest) -> PolicyBatchValidationResponse:
+    settings = rag_settings_from_config(load_config())
+    try:
+        model_settings = get_model_settings(payload.model_id)
+        enriched_cases = []
+        for raw_case in payload.test_cases:
+            case = dict(raw_case)
+            key = "parcel" if isinstance(case.get("parcel"), dict) else "land_attrs"
+            parcel = case.get(key) if isinstance(case.get(key), dict) else {}
+            case[key] = workspace.enrich_parcel_attributes(parcel)
+            enriched_cases.append(case)
+        result = validate_policy_feasibility_batch(enriched_cases, settings, model_settings)
+    except (FileNotFoundError, ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return PolicyBatchValidationResponse(**result)
+
+
+@app.post("/api/rag/candidates/feasibility", response_model=CandidatePolicyAnalysisResponse)
+def analyze_candidate_feasibility(payload: CandidatePolicyAnalysisRequest) -> CandidatePolicyAnalysisResponse:
+    settings = rag_settings_from_config(load_config())
+    candidates = workspace.candidate_parcels()
+    if candidates.analysis_required or not candidates.parcels:
+        raise HTTPException(status_code=422, detail="当前没有候选地块，请先运行候选地块分析。")
+    try:
+        model_settings = get_model_settings(payload.model_id)
+        result = analyze_candidate_policy_feasibility(
+            candidates.parcels,
+            settings,
+            model_settings,
+        )
+        decisions, spatial, artifact = workspace.apply_candidate_policy_results(
+            result["results"],
+            result["report"],
+        )
+    except (FileNotFoundError, ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return CandidatePolicyAnalysisResponse(
+        **result,
+        decisions=decisions,
+        spatial=spatial,
+        artifact=artifact,
+    )
+
+
+@app.post("/api/rag/candidates/feasibility/stream")
+async def stream_candidate_policy_feasibility(
+    payload: CandidatePolicyAnalysisRequest,
+) -> StreamingResponse:
+    settings = rag_settings_from_config(load_config())
+    candidates = workspace.candidate_parcels()
+    if candidates.analysis_required or not candidates.parcels:
+        raise HTTPException(status_code=422, detail="当前没有候选地块，请先运行候选地块分析。")
+    try:
+        model_settings = get_model_settings(payload.model_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    event_queue: Queue[object] = Queue()
+
+    def publish(progress: dict[str, Any]) -> None:
+        event_queue.put({"type": "progress", "progress": progress})
+
+    def run() -> None:
+        try:
+            result = analyze_candidate_policy_feasibility(
+                candidates.parcels,
+                settings,
+                model_settings,
+                progress_callback=publish,
+            )
+            decisions, spatial, artifact = workspace.apply_candidate_policy_results(
+                result["results"],
+                result["report"],
+            )
+            response = CandidatePolicyAnalysisResponse(
+                **result,
+                decisions=decisions,
+                spatial=spatial,
+                artifact=artifact,
+            )
+            event_queue.put({"type": "result", "result": jsonable_encoder(response)})
+        except Exception as exc:
+            event_queue.put({"type": "error", "message": f"候选地块政策可行性分析失败：{exc}"})
+        finally:
+            event_queue.put(_STREAM_END)
+
+    Thread(target=run, daemon=True).start()
+
+    async def generate():
+        while True:
+            item = await asyncio.to_thread(event_queue.get)
+            if item is _STREAM_END:
+                break
+            yield json.dumps(item, ensure_ascii=False) + "\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="application/x-ndjson",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.get("/api/artifacts", response_model=list[ArtifactSummary])

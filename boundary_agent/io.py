@@ -30,7 +30,14 @@ def coerce(value: Any) -> Any:
 def parse_json(data: bytes | str) -> list[dict]:
     text = data.decode("utf-8-sig") if isinstance(data, bytes) else data
     obj = json.loads(text)
-    blocks = obj.get("blocks", obj) if isinstance(obj, dict) else obj
+    if isinstance(obj, dict) and isinstance(obj.get("features"), list):
+        blocks = [
+            dict(feature.get("attributes") or {})
+            for feature in obj["features"]
+            if isinstance(feature, dict) and isinstance(feature.get("attributes"), dict)
+        ]
+    else:
+        blocks = obj.get("blocks", obj) if isinstance(obj, dict) else obj
     if not isinstance(blocks, list):
         raise ValueError("JSON必须是街区数组，或包含blocks数组")
     return blocks

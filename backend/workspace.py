@@ -17,6 +17,7 @@ import geopandas as gpd
 from backend.schemas import (
     ArtifactDetail,
     ArtifactSummary,
+    CandidateParcelPayload,
     ConstraintDatasetSummary,
     DatasetPayload,
     LandscapeBoundarySummary,
@@ -42,6 +43,13 @@ from boundary_agent.spatial import (
     evaluate_landscape_scenario,
     export_candidate_shapefile,
 )
+
+
+POLICY_FEASIBILITY_DECISIONS = {
+    "一级优先调入",
+    "二级优先调入",
+    "建议调出",
+}
 
 
 def _model_diagnostics() -> dict[str, Any]:
@@ -773,3 +781,133 @@ class DemoWorkspace:
                 has_more=offset + len(page) < len(blocks),
                 blocks=list(page),
             )
+
+    def enrich_parcel_attributes(self, parcel: dict[str, Any]) -> dict[str, Any]:
+        """Join the active multi-source dataset to a feasibility request by block_id."""
+
+        with self._lock:
+            identifier = str(parcel.get("block_id") or parcel.get("parcel_id") or "").strip()
+            if not identifier:
+                return dict(parcel)
+            matched = next(
+                (block for block in self.blocks if str(block.get("block_id") or "").strip() == identifier),
+                None,
+            )
+            if matched is None:
+                return dict(parcel)
+            enriched = dict(matched)
+            enriched.update(parcel)
+            enriched["block_id"] = identifier
+            enriched.setdefault("parcel_id", identifier)
+            enriched["_attribute_source"] = self.dataset_name
+            return enriched
+
+    def candidate_parcels(self) -> CandidateParcelPayload:
+        """Return adjustment candidates from the latest analysis with source attributes."""
+
+        with self._lock:
+            if not self.latest_analysis_payload:
+                return CandidateParcelPayload(analysis_required=True)
+            decision_map = {
+                str(item.get("block_id")): item
+                for item in self.latest_analysis_payload.get("decisions", [])
+                if item.get("block_id") is not None
+                and item.get("decision") in POLICY_FEASIBILITY_DECISIONS
+            }
+            parcels: list[dict[str, Any]] = []
+            for block in self.blocks:
+                block_id = str(block.get("block_id") or "")
+                decision = decision_map.get(block_id)
+                if decision is None:
+                    continue
+                decision_text = str(decision.get("decision") or "")
+                parcels.append({
+                    **block,
+                    "candidate_decision": decision.get("decision"),
+                    "proposed_action": "调出" if "调出" in decision_text else "调入",
+                    "candidate_score": decision.get("overall_suitability"),
+                    "development_probability": decision.get(
+                        "development_probability",
+                        block.get("development_probability"),
+                    ),
+                    "key_drivers": decision.get("key_drivers") or [],
+                })
+            return CandidateParcelPayload(
+                available=bool(parcels),
+                count=len(parcels),
+                parcels=parcels,
+            )
+
+    def apply_candidate_policy_results(
+        self,
+        results: list[dict[str, Any]],
+        report: str,
+    ) -> tuple[list[dict[str, Any]], dict[str, Any] | None, ArtifactSummary]:
+        """Persist parcel-level policy conclusions into the latest decisions and map."""
+
+        def item_texts(values: Any) -> list[str]:
+            output: list[str] = []
+            for value in values if isinstance(values, list) else []:
+                if isinstance(value, dict):
+                    text = value.get("condition") or value.get("name") or value.get("evidence")
+                else:
+                    text = value
+                if text not in (None, ""):
+                    output.append(str(text))
+            return output
+
+        with self._lock:
+            if not self.latest_analysis_payload:
+                raise ValueError("当前没有候选地块分析结果，请先完成候选地块分析。")
+            result_map = {
+                str(item.get("block_id")): item
+                for item in results
+                if item.get("block_id") is not None
+            }
+            payload = dict(self.latest_analysis_payload)
+            decisions: list[dict[str, Any]] = []
+            for source in payload.get("decisions", []):
+                decision = dict(source)
+                result = result_map.get(str(decision.get("block_id")))
+                if result is not None:
+                    structured = result.get("policy_analysis") or {}
+                    decision.update({
+                        "policy_feasibility_completed": bool(result.get("success")),
+                        "policy_feasibility_decision": structured.get("policy_decision"),
+                        "policy_feasible": structured.get("policy_feasible"),
+                        "policy_hard_constraint": bool(structured.get("hard_constraint", False)),
+                        "policy_support_level": structured.get("policy_support_level"),
+                        "policy_feasibility_reason": structured.get("policy_reason") or result.get("error"),
+                        "policy_prohibited_constraints": item_texts(structured.get("prohibited_constraints")),
+                        "policy_restrictive_conditions": item_texts(structured.get("restrictive_conditions")),
+                        "policy_supportive_conditions": item_texts(structured.get("supportive_conditions")),
+                        "policy_missing_information": [
+                            str(value)
+                            for value in structured.get("missing_information", [])
+                            if str(value).strip()
+                        ],
+                    })
+                decisions.append(decision)
+
+            payload["decisions"] = decisions
+            payload["policy_feasibility_results"] = results
+            payload["policy_feasibility_report"] = report
+            self.latest_analysis_payload = payload
+            spatial = (
+                build_analysis_geojson(self.spatial_dataset, payload)
+                if self.spatial_dataset is not None
+                else None
+            )
+            preview = dict(payload)
+            if spatial is not None:
+                preview["spatial"] = spatial
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            content = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+            artifact = self._add_artifact(
+                f"candidate_policy_feasibility_{timestamp}.json",
+                "analysis",
+                "application/json",
+                preview=preview,
+                content=content,
+            )
+            return decisions, spatial, artifact

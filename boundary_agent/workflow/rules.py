@@ -107,7 +107,7 @@ def check_constraints(
     if disaster_prohibited:
         flags.append("位于地质灾害禁止建设区")
     elif block.prohibited_disaster_zone is None and block.disaster_risk is None:
-        missing.append("地质灾害约束")
+        missing.append("尚未提供地质灾害约束数据")
     hard = bool(flags)
     if disaster_prohibited or block.disaster_risk in {"高", "high"}:
         risk = "高"
