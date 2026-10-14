@@ -51,6 +51,36 @@ class BlockInput(BaseModel):
     permanent_farmland: bool | None = None
     prohibited_disaster_zone: bool | None = None
 
+    @field_validator(
+        "development_potential",
+        "sec_prob",
+        "ter_prob",
+        "tra_prob",
+        mode="before",
+    )
+    @classmethod
+    def clamp_unit_probability(cls, value: Any) -> Any:
+        """Clamp probability fields to [0, 1] to absorb floating-point noise."""
+        if value is None or value == "":
+            return value
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return value
+        return max(0.0, min(1.0, number))
+
+    @field_validator("development_probability", mode="before")
+    @classmethod
+    def clamp_percentage_probability(cls, value: Any) -> Any:
+        """The development probability is stored as a percentage in [0, 100]."""
+        if value is None or value == "":
+            return value
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return value
+        return max(0.0, min(100.0, number))
+
     @field_validator("block_id")
     @classmethod
     def strip_id(cls, value: str) -> str:

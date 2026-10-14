@@ -12,7 +12,7 @@ from typing import Any
 
 import geopandas as gpd
 import pandas as pd
-from shapely.geometry import GeometryCollection, MultiPolygon, Polygon
+from shapely.geometry import GeometryCollection, LinearRing, MultiPolygon, Polygon
 from shapely.ops import polygonize, unary_union
 
 from boundary_agent.gis import SHP_FIELD_ALIASES, TEXT_ATTRIBUTE_FIELDS
@@ -82,6 +82,108 @@ class SpatialDataset:
 
     def close(self) -> None:
         self.temp_dir.cleanup()
+
+
+def _arcgis_polygon(rings: list[Any]) -> Polygon | MultiPolygon | None:
+    """Convert ArcGIS polygon rings (clockwise shells) to a Shapely geometry."""
+
+    valid_rings: list[list[list[float]]] = []
+    for raw_ring in rings or []:
+        if not isinstance(raw_ring, list) or len(raw_ring) < 4:
+            continue
+        try:
+            coords = [[float(point[0]), float(point[1])] for point in raw_ring]
+        except (TypeError, ValueError, IndexError):
+            continue
+        if coords[0] != coords[-1]:
+            coords.append(coords[0])
+        if len(coords) >= 4:
+            valid_rings.append(coords)
+    if not valid_rings:
+        return None
+
+    shells = [ring for ring in valid_rings if not LinearRing(ring).is_ccw]
+    holes = [ring for ring in valid_rings if LinearRing(ring).is_ccw]
+    if not shells:
+        shells, holes = [valid_rings[0]], valid_rings[1:]
+
+    polygons: list[Polygon] = []
+    unused_holes = list(holes)
+    for shell in shells:
+        shell_polygon = Polygon(shell)
+        contained: list[list[list[float]]] = []
+        for hole in list(unused_holes):
+            if shell_polygon.covers(Polygon(hole).representative_point()):
+                contained.append(hole)
+                unused_holes.remove(hole)
+        polygon = Polygon(shell, holes=contained)
+        if not polygon.is_valid:
+            polygon = polygon.buffer(0)
+        polygonal = _polygonal_geometry(polygon)
+        if polygonal is not None:
+            if isinstance(polygonal, MultiPolygon):
+                polygons.extend(polygonal.geoms)
+            else:
+                polygons.append(polygonal)
+    if not polygons:
+        return None
+    merged = unary_union(polygons)
+    return _polygonal_geometry(merged)
+
+
+def read_arcgis_feature_set(name: str, content: bytes | str) -> SpatialDataset:
+    """Read an ArcGIS FeatureSet JSON containing attributes and polygon rings."""
+
+    raw = content.decode("utf-8-sig") if isinstance(content, bytes) else content
+    payload = json.loads(raw)
+    if not isinstance(payload, dict) or not isinstance(payload.get("features"), list):
+        raise ValueError("JSON 不是 ArcGIS FeatureSet（缺少 features 数组）")
+    geometry_type = str(payload.get("geometryType") or "")
+    if geometry_type and geometry_type != "esriGeometryPolygon":
+        raise ValueError(f"当前只支持 ArcGIS 面要素，收到 {geometry_type}")
+
+    temp_dir = tempfile.TemporaryDirectory()
+    source_path = Path(temp_dir.name) / Path(name).name
+    source_path.write_text(raw, encoding="utf-8")
+    try:
+        records: list[dict[str, Any]] = []
+        geometries: list[Polygon | MultiPolygon] = []
+        for index, feature in enumerate(payload["features"], 1):
+            if not isinstance(feature, dict):
+                continue
+            attributes = feature.get("attributes")
+            geometry = feature.get("geometry")
+            if not isinstance(attributes, dict) or not isinstance(geometry, dict):
+                continue
+            polygon = _arcgis_polygon(geometry.get("rings") or [])
+            if polygon is None or polygon.is_empty:
+                continue
+            row = dict(attributes)
+            row.setdefault("block_id", f"ARCGIS_{index:06d}")
+            records.append(row)
+            geometries.append(polygon)
+        if not records:
+            raise ValueError("ArcGIS JSON 中没有可用的地块面要素")
+
+        spatial_reference = payload.get("spatialReference") or {}
+        wkid = spatial_reference.get("latestWkid") or spatial_reference.get("wkid")
+        if not wkid:
+            raise ValueError("ArcGIS JSON 缺少 spatialReference.wkid")
+        frame = gpd.GeoDataFrame(records, geometry=geometries, crs=f"EPSG:{int(wkid)}")
+        source_fields = {_canonical_column(str(column)) for column in frame.columns}
+        frame = _standardize_columns(frame)
+        return SpatialDataset(
+            name=name,
+            temp_dir=temp_dir,
+            source_path=source_path,
+            source_crs=frame.crs.to_string(),
+            original=frame,
+            blocks=_blocks_from_frame(frame),
+            warnings=_dataset_warnings(frame, source_fields),
+        )
+    except Exception:
+        temp_dir.cleanup()
+        raise
 
 
 def _safe_extract(archive: zipfile.ZipFile, target: Path) -> None:
@@ -444,23 +546,49 @@ def build_analysis_geojson(
         properties["is_candidate"] = bool(
             decision and decision.get("decision") in ADJUSTMENT_DECISIONS
         )
+        display_decision = decision.get("decision") if decision else None
+        if display_decision in (None, "", "\u4fdd\u6301\u73b0\u72b6"):
+            display_decision = "\u4fdd\u6301\u4e0d\u53d8"
+        properties["ai_decision"] = display_decision
         if decision:
+            development_probability = decision.get("development_probability")
+            try:
+                development_potential = max(
+                    0.0,
+                    min(1.0, float(development_probability) / 100.0),
+                )
+            except (TypeError, ValueError):
+                development_potential = None
             properties.update(
                 {
-                    "ai_decision": decision.get("decision"),
+                    "ai_decision": display_decision,
                     "ai_suitability": decision.get("overall_suitability"),
-                    "ai_development_probability": decision.get("development_probability"),
+                    "ai_development_probability": development_probability,
+                    "development_potential": development_potential,
                     "ai_planning_match": decision.get("planning_match"),
                     "ai_constraint_cost": decision.get("constraint_cost"),
                     "ai_dynamic_score": decision.get("dynamic_score"),
                     "ai_confidence": decision.get("confidence"),
                     "ai_review": decision.get("manual_review_required"),
                     "ai_recommended_use": decision.get("recommended_use"),
+                    "ai_key_reasons": "；".join(decision.get("key_reasons") or []),
+                    "ai_risks": "；".join(decision.get("risks") or []),
+                    "ai_missing_information": "；".join(decision.get("missing_information") or []),
                     "ai_key_drivers": "；".join(decision.get("key_drivers") or []),
                     "ai_constraint_status": decision.get("constraint_status"),
                     "ai_policy_compliance": decision.get("policy_compliance"),
                     "ai_policy_reason": decision.get("policy_reason"),
                     "ai_policy_requirements": "；".join(decision.get("policy_requirements") or []),
+                    "ai_policy_feasibility_completed": decision.get("policy_feasibility_completed"),
+                    "ai_policy_feasibility_decision": decision.get("policy_feasibility_decision"),
+                    "ai_policy_feasible": decision.get("policy_feasible"),
+                    "ai_policy_hard_constraint": decision.get("policy_hard_constraint"),
+                    "ai_policy_support_level": decision.get("policy_support_level"),
+                    "ai_policy_feasibility_reason": decision.get("policy_feasibility_reason"),
+                    "ai_policy_prohibited_constraints": "；".join(decision.get("policy_prohibited_constraints") or []),
+                    "ai_policy_restrictive_conditions": "；".join(decision.get("policy_restrictive_conditions") or []),
+                    "ai_policy_supportive_conditions": "；".join(decision.get("policy_supportive_conditions") or []),
+                    "ai_policy_missing_information": "；".join(decision.get("policy_missing_information") or []),
                     "ai_rank_city": decision.get("rank_city"),
                     "ai_rank_district": decision.get("rank_district"),
                     "ai_recommendation": decision.get("recommendation"),

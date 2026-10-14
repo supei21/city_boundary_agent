@@ -1,6 +1,8 @@
 import type {
   ArtifactDetail,
   ArtifactSummary,
+  CandidateParcelPayload,
+  CandidatePolicyAnalysisResponse,
   CreateUserModelResponse,
   DatasetPayload,
   LandscapeEvaluation,
@@ -9,6 +11,10 @@ import type {
   RagPolicyDocumentDetail,
   RagPolicyDocumentSummary,
   RagPolicySearchResult,
+  RagQuestionResponse,
+  PolicyFeasibilityResponse,
+  PolicyFeasibilityProgress,
+  PolicyBatchValidationResponse,
   StreamPacket,
   UserModelInput,
   WorkspaceSummary,
@@ -33,6 +39,10 @@ export function getWorkspace(): Promise<WorkspaceSummary> {
 export function getDataset(offset = 0, limit = 50, q = ""): Promise<DatasetPayload> {
   const query = q.trim() ? `&q=${encodeURIComponent(q.trim())}` : "";
   return request(`/dataset?offset=${offset}&limit=${limit}${query}`);
+}
+
+export function getCandidateParcels(): Promise<CandidateParcelPayload> {
+  return request("/candidates");
 }
 
 export function resetWorkspace(): Promise<WorkspaceSummary> {
@@ -91,7 +101,6 @@ export async function streamLandscapeEvaluation(
   const decoder = new TextDecoder();
   let buffer = "";
   let result: LandscapeEvaluation | null = null;
-
   const handleLine = (line: string) => {
     if (!line.trim()) return;
     const packet = JSON.parse(line) as
@@ -135,18 +144,6 @@ export function generatePolicyReport(modelId: string): Promise<ArtifactSummary> 
   });
 }
 
-export function listRagPolicies(): Promise<RagPolicyDocumentSummary[]> {
-  return request("/rag/policies");
-}
-
-export function getRagPolicyDocument(id: string): Promise<RagPolicyDocumentDetail> {
-  return request(`/rag/policies/${encodeURIComponent(id)}`);
-}
-
-export function searchRagPolicies(query: string, limit = 8): Promise<RagPolicySearchResult[]> {
-  return request(`/rag/search?q=${encodeURIComponent(query)}&limit=${limit}`);
-}
-
 export function getArtifact(id: string): Promise<ArtifactDetail> {
   return request(`/artifacts/${id}`);
 }
@@ -163,12 +160,110 @@ export function policyReferencePdfUrl(): string {
   return `${API_ROOT}/policies/reference-pdf/preview`;
 }
 
+export function listRagPolicies(): Promise<RagPolicyDocumentSummary[]> {
+  return request("/rag/policies");
+}
+
+export function getRagPolicyDocument(id: string): Promise<RagPolicyDocumentDetail> {
+  return request(`/rag/policies/${encodeURIComponent(id)}`);
+}
+
+export function searchRagPolicies(query: string, limit = 8): Promise<RagPolicySearchResult[]> {
+  return request(`/rag/search?q=${encodeURIComponent(query)}&limit=${limit}`);
+}
+
+export function askRagQuestion(question: string, modelId = "local-rules"): Promise<RagQuestionResponse> {
+  return request("/rag/ask", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ question, model_id: modelId }),
+  });
+}
+
+export function analyzePolicyFeasibility(
+  parcel: Record<string, unknown>,
+  modelId = "local-rules",
+): Promise<PolicyFeasibilityResponse> {
+  return request("/rag/feasibility", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ parcel, model_id: modelId }),
+  });
+}
+
+export function validatePolicyFeasibilityBatch(
+  testCases: Record<string, unknown>[],
+  modelId = "local-rules",
+): Promise<PolicyBatchValidationResponse> {
+  return request("/rag/feasibility/batch", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ test_cases: testCases, model_id: modelId }),
+  });
+}
+
+export function analyzeCandidatePolicyFeasibility(
+  modelId = "local-rules",
+): Promise<CandidatePolicyAnalysisResponse> {
+  return request("/rag/candidates/feasibility", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model_id: modelId }),
+  });
+}
+
+export async function streamCandidatePolicyFeasibility(
+  modelId: string,
+  onProgress: (progress: PolicyFeasibilityProgress) => void,
+): Promise<CandidatePolicyAnalysisResponse> {
+  const response = await fetch(`${API_ROOT}/rag/candidates/feasibility/stream`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model_id: modelId }),
+  });
+  if (!response.ok || !response.body) {
+    const payload = await response.json().catch(() => null);
+    throw new Error(payload?.detail ?? `无法启动政策可行性分析（${response.status}）`);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let result: CandidatePolicyAnalysisResponse | null = null;
+  const handleLine = (line: string) => {
+    if (!line.trim()) return;
+    const packet = JSON.parse(line) as
+      | { type: "progress"; progress: PolicyFeasibilityProgress }
+      | { type: "result"; result: CandidatePolicyAnalysisResponse }
+      | { type: "error"; message: string };
+    if (packet.type === "progress") onProgress(packet.progress);
+    if (packet.type === "result") result = packet.result;
+    if (packet.type === "error") throw new Error(packet.message);
+  };
+
+  while (true) {
+    const { value, done } = await reader.read();
+    buffer += decoder.decode(value, { stream: !done });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+    for (const line of lines) handleLine(line);
+    if (done) break;
+  }
+  if (buffer.trim()) handleLine(buffer);
+  if (!result) throw new Error("政策可行性分析流结束但未返回结果");
+  return result;
+}
+
 export function createUserModel(input: UserModelInput): Promise<CreateUserModelResponse> {
   return request("/models", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),
   });
+}
+
+export function deleteUserModel(modelId: string): Promise<WorkspaceSummary> {
+  return request(`/models/${encodeURIComponent(modelId)}`, { method: "DELETE" });
 }
 
 export async function streamChat(

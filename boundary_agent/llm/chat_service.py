@@ -71,8 +71,6 @@ def _fallback_intent(query: str, blocks: list[dict]) -> ChatIntent:
         inside = True
 
     broad_action = action in {"find_inclusion", "find_exclusion", "summarize_all"}
-    if action == "evaluate_landscape" and not matched_ids and not matched_names:
-        broad_action = True
     if action == "show_data" and not matched_ids and not matched_names:
         broad_action = True
     analyze_all = (
@@ -80,6 +78,8 @@ def _fallback_intent(query: str, blocks: list[dict]) -> ChatIntent:
         or any(word in text for word in ("所有", "全部", "哪些", "哪个"))
         or (inside is not None and "街区" in text and not matched_ids and not matched_names)
     )
+    if action == "evaluate_landscape" and not matched_ids and not matched_names:
+        analyze_all = True
     needs_target = action in {"analyze_blocks", "compare_blocks", "evaluate_landscape"} and not analyze_all
     clarification = needs_target and not matched_ids and not matched_names
     question = "请告诉我要分析的 block_id 或街区名称。" if clarification else None
@@ -181,7 +181,6 @@ def _fallback_answer(query: str, intent: ChatIntent, decisions: list[dict], tota
             "- `比较 WH2025_DEMO001 和 WH2025_DEMO003`\n"
             "- `哪些街区适合调入开发边界？`\n"
             "- `找出建议调出的边界内街区`\n"
-            "- `评价 WH2025_DEMO001 调入后的边界形态`\n"
             "- `汇总全部街区的识别结果`"
         )
     if not decisions:
@@ -326,16 +325,6 @@ def _handle_chat_fixed_flow(
         target = "调入" if has_include and not has_exclude else "调出" if has_exclude and not has_include else "全部"
         explicit_target = bool(intent.block_ids or intent.block_names)
         selected_ids = [str(block["block_id"]) for block in selected] if explicit_target else []
-        emit(
-            event_callback,
-            "action",
-            "运行边界形态评价",
-            (
-                f"对 {len(selected_ids)} 个明确地块构造评价情景"
-                if selected_ids
-                else "读取最近一次调入调出分析中的候选地块"
-            ),
-        )
         holder: dict[str, dict[str, Any]] = {}
         morphology_tool = build_landscape_tools(
             {str(block.get("block_id")) for block in blocks if block.get("block_id") is not None},
@@ -351,7 +340,6 @@ def _handle_chat_fixed_flow(
         }))
         if tool_payload.get("error"):
             message = f"形态评价失败：{tool_payload['error']}"
-            emit(event_callback, "error", "形态评价失败", str(tool_payload["error"]), status="error")
             return ChatTurnResult(
                 intent=intent,
                 response=message,
@@ -360,33 +348,20 @@ def _handle_chat_fixed_flow(
                 warnings=warnings + [message],
             )
         landscape = holder["value"]
-        selected_ids = [str(value) for value in tool_payload.get("selected_block_ids", [])]
         summary = landscape.get("summary") or {}
         lines = [
             f"已完成 {summary.get('evaluated_count', 0)} 个地块的边界形态评价。",
-            (
-                f"总体改善 {summary.get('improved_count', 0)} 个、基本稳定 "
-                f"{summary.get('balanced_count', 0)} 个、总体恶化 {summary.get('worsened_count', 0)} 个。"
-            ),
+            f"总体改善 {summary.get('improved_count', 0)} 个、基本稳定 {summary.get('balanced_count', 0)} 个、总体恶化 {summary.get('worsened_count', 0)} 个。",
         ]
         for item in landscape.get("results", [])[:10]:
             lines.append(
                 f"- **{item.get('block_id')}（{item.get('action_label')}）**："
                 f"{item.get('overall_label')}。{item.get('conclusion')}"
             )
-        lines.append("以上为Demo形态评价辅助判断，不等同于正式规划结论。")
-        emit(
-            event_callback,
-            "observe",
-            "形成形态评价结果",
-            f"返回 {summary.get('evaluated_count', 0)} 个地块的六项指数和拓扑检查结果",
-            status="completed",
-        )
-        emit(event_callback, "answer", "完成回答", "已整理形态评价结论", status="completed")
         return ChatTurnResult(
             intent=intent,
             response="\n\n".join(lines),
-            selected_block_ids=selected_ids,
+            selected_block_ids=[str(value) for value in tool_payload.get("selected_block_ids", [])],
             workflow_summary=summary,
             landscape_evaluation=landscape,
             model_used=intent.parser == "llm",
@@ -428,7 +403,8 @@ def _handle_chat_fixed_flow(
     model_warning = trained_model.get("warning")
     if model_warning:
         warnings.append(model_warning)
-    decisions = list(workflow["decisions"])
+    all_decisions = list(workflow["decisions"])
+    decisions = list(all_decisions)
     if intent.requested_decisions:
         wanted = set(intent.requested_decisions)
         decisions = [item for item in decisions if item["decision"] in wanted]
@@ -465,7 +441,10 @@ def _handle_chat_fixed_flow(
         intent=intent,
         response=response,
         selected_block_ids=[str(block["block_id"]) for block in selected],
-        decisions=[BlockDecision.model_validate(item) for item in decisions],
+        # The answer above may use a requested subset, while the map must always
+        # receive every evaluated parcel (including exclusions and unchanged
+        # parcels) together with its model probability.
+        decisions=[BlockDecision.model_validate(item) for item in all_decisions],
         workflow_summary=workflow["summary"],
         model_used=used_model,
         warnings=warnings,

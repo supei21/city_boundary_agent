@@ -61,7 +61,7 @@ def search_policy_library(settings: PolicyRagSettings, query: str, k: int | None
         source = str(item.get("source") or "")
         results.append(
             {
-                "document_id": encode_policy_id(source) if source and not source.startswith("policy_rules.json_") else None,
+                "document_id": encode_policy_id(source) if source else None,
                 "source": source,
                 "type": item.get("type", ""),
                 "score": item.get("score", 0),

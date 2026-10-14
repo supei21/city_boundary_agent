@@ -90,6 +90,13 @@ class DatasetPayload(BaseModel):
     blocks: list[dict[str, Any]]
 
 
+class CandidateParcelPayload(BaseModel):
+    available: bool = False
+    analysis_required: bool = False
+    count: int = 0
+    parcels: list[dict[str, Any]] = Field(default_factory=list)
+
+
 class UserModelInput(BaseModel):
     label: str = Field(min_length=1, max_length=40)
     model: str = Field(min_length=1, max_length=80)
@@ -173,3 +180,64 @@ class RagPolicySearchResult(BaseModel):
     rule_id: str | None = None
     article_ref: str | None = None
     excerpt: str = ""
+
+
+class RagQuestionRequest(BaseModel):
+    question: str = Field(min_length=1, max_length=2000)
+    model_id: str = Field(default="local-rules", min_length=1, max_length=80)
+
+
+class RagQuestionResponse(BaseModel):
+    answer: str
+    mode: str
+    best_score: float = 0
+    sources: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class PolicyFeasibilityRequest(BaseModel):
+    parcel: dict[str, Any]
+    model_id: str = Field(default="local-rules", min_length=1, max_length=80)
+
+
+class PolicyFeasibilityResponse(BaseModel):
+    tool_name: str
+    tool_version: str
+    parcel_id: str = ""
+    policy_analysis: dict[str, Any]
+    hard_constraint_analysis: dict[str, Any]
+    retrieval: dict[str, Any]
+    parcel_context: dict[str, Any] = Field(default_factory=dict)
+    answer: str
+
+
+class PolicyBatchValidationRequest(BaseModel):
+    test_cases: list[dict[str, Any]] = Field(min_length=1, max_length=50)
+    model_id: str = Field(default="local-rules", min_length=1, max_length=80)
+
+
+class PolicyBatchValidationResponse(BaseModel):
+    tool_name: str = "policy_feasibility_batch_validation"
+    tool_version: str = "3.10"
+    total: int
+    passed: int
+    pass_rate: float
+    gate_match_rate: float | None = None
+    evidence_valid_rate: float
+    input_valid_rate: float
+    results: list[dict[str, Any]] = Field(default_factory=list)
+    report: str
+
+
+class CandidatePolicyAnalysisRequest(BaseModel):
+    model_id: str = Field(default="local-rules", min_length=1, max_length=80)
+
+
+class CandidatePolicyAnalysisResponse(BaseModel):
+    total: int
+    completed: int
+    failed: int
+    results: list[dict[str, Any]] = Field(default_factory=list)
+    decisions: list[dict[str, Any]] = Field(default_factory=list)
+    report: str
+    spatial: dict[str, Any] | None = None
+    artifact: ArtifactSummary | None = None

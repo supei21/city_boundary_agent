@@ -52,6 +52,12 @@ const DETAIL_FIELDS: Array<[string, string]> = [
   ["ai_policy_compliance", "政策合规"],
   ["ai_policy_reason", "政策判读依据"],
   ["ai_policy_requirements", "政策待补条件"],
+  ["ai_policy_feasibility_decision", "政策可行性结论"],
+  ["ai_policy_support_level", "政策支持程度"],
+  ["ai_policy_hard_constraint", "是否存在刚性约束"],
+  ["ai_policy_feasibility_reason", "政策可行性原因"],
+  ["ai_policy_restrictive_conditions", "政策限制条件"],
+  ["ai_policy_missing_information", "政策待补充信息"],
   ["ai_confidence", "置信度"],
   ["ai_recommendation", "建议"],
 ];
@@ -73,6 +79,81 @@ function displayValue(value: unknown): string {
   if (value === null || value === undefined || value === "") return "—";
   if (typeof value === "boolean") return value ? "是" : "否";
   return String(value);
+}
+
+function potentialIndex(properties: FeatureProperties): unknown {
+  if (properties.development_potential !== null && properties.development_potential !== undefined) {
+    return properties.development_potential;
+  }
+  if (typeof properties.ai_development_probability === "number") {
+    return properties.ai_development_probability / 100;
+  }
+  return undefined;
+}
+
+function formatPotential(value: unknown): string {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric.toFixed(3) : displayValue(value);
+}
+
+function hoverPopupContent(
+  properties: FeatureProperties,
+  mode: MapMode,
+  landscapeResult: LandscapeResult | null,
+): HTMLDivElement {
+  const root = document.createElement("div");
+  root.className = "map-hover-explanation";
+  const title = document.createElement("strong");
+  const isBoundary = properties.layer_type === "urban_development_boundary";
+  title.textContent = isBoundary
+    ? "现状城镇开发边界"
+    : displayValue(properties.block_name || properties.block_id);
+  const headline = document.createElement("b");
+  headline.textContent = isBoundary
+    ? "现状城镇开发边界"
+    : landscapeResult
+      ? `形态评价：${landscapeResult.overall_label}`
+      : mode === "potential"
+        ? `综合发展潜力指数：${formatPotential(potentialIndex(properties))}`
+        : `调入调出结论：${displayValue(properties.ai_decision || "保持不变")}`;
+  root.append(title, headline);
+
+  const fields: Array<[string, unknown]> = landscapeResult
+    ? [
+      ["调整动作", landscapeResult.action_label],
+      ["形态结论", landscapeResult.conclusion],
+      ["拓扑风险", landscapeResult.topology_check.risk_label],
+    ]
+    : mode === "potential"
+      ? [
+        ["发展概率", properties.ai_development_probability],
+        ["综合适宜性", properties.ai_suitability],
+        ["主要驱动", properties.ai_key_drivers],
+      ]
+      : [
+        ["综合适宜性", properties.ai_suitability],
+        ["发展概率", properties.ai_development_probability],
+        ["主要驱动", properties.ai_key_drivers],
+        ["判断原因", properties.ai_key_reasons || properties.ai_recommendation],
+        ["主要风险", properties.ai_risks],
+        ["政策可行性", properties.ai_policy_feasibility_decision],
+        ["政策支持程度", properties.ai_policy_support_level],
+        ["刚性约束", properties.ai_policy_hard_constraint],
+        ["政策分析原因", properties.ai_policy_feasibility_reason],
+        ["政策限制条件", properties.ai_policy_restrictive_conditions],
+        ["政策待补信息", properties.ai_policy_missing_information],
+      ];
+  fields.forEach(([label, value]) => {
+    if (value === null || value === undefined || value === "") return;
+    const row = document.createElement("div");
+    const name = document.createElement("span");
+    const detail = document.createElement("p");
+    name.textContent = label;
+    detail.textContent = displayValue(value);
+    row.append(name, detail);
+    root.appendChild(row);
+  });
+  return root;
 }
 
 const EMPTY_FEATURE_COLLECTION: FeatureCollection = { type: "FeatureCollection", features: [] };
@@ -177,6 +258,13 @@ export function SpatialMap({
     mapRef.current = map;
     map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-right");
     map.addControl(new maplibregl.AttributionControl({ compact: true }), "bottom-right");
+    const hoverPopup = new maplibregl.Popup({
+      closeButton: false,
+      closeOnClick: false,
+      offset: 12,
+      className: "block-hover-popup",
+      maxWidth: "380px",
+    });
 
     map.on("load", () => {
       if (boundaryFeatures.length && boundaryData) {
@@ -339,6 +427,19 @@ export function SpatialMap({
       map.on("mousemove", (event) => {
         const features = map.queryRenderedFeatures(event.point, { layers: interactiveLayers });
         map.getCanvas().style.cursor = features.length ? "pointer" : "";
+        const properties = features[0]?.properties as FeatureProperties | undefined;
+        if (!properties) {
+          hoverPopup.remove();
+          return;
+        }
+        const blockId = String(properties.block_id ?? "");
+        const landscapeResult = isBoundaryMode && blockId
+          ? evaluationByBlockId.get(blockId) ?? null
+          : null;
+        hoverPopup
+          .setLngLat(event.lngLat)
+          .setDOMContent(hoverPopupContent(properties, mode, landscapeResult))
+          .addTo(map);
       });
       map.on("click", (event) => {
         const feature = map.queryRenderedFeatures(event.point, { layers: interactiveLayers })[0];
@@ -377,22 +478,22 @@ export function SpatialMap({
         const popupContent = document.createElement("div");
         popupContent.className = "map-popup-content";
         const title = document.createElement("strong");
-        title.textContent = displayValue(
-          isBoundary ? properties.boundary_name : properties.block_name || properties.block_id,
-        );
+        title.textContent = isBoundary
+          ? "现状城镇开发边界"
+          : displayValue(properties.block_name || properties.block_id);
         const detail = document.createElement("span");
         const scoreValue = mode === "potential"
-          ? properties.development_potential
+          ? potentialIndex(properties)
           : properties.ai_dynamic_score;
         const scoreLabel = mode === "potential" ? "综合潜力" : "动态适配";
         const score = scoreValue === undefined
           ? ""
-          : ` · ${scoreLabel} ${displayValue(scoreValue)}`;
+          : ` · ${scoreLabel} ${mode === "potential" ? formatPotential(scoreValue) : displayValue(scoreValue)}`;
         detail.textContent = isBoundary
           ? `城镇开发边界 · ${displayValue(properties.patch_count)} 个斑块`
           : isBoundaryMode && landscapeResult
             ? `${landscapeResult.action_label} · ${landscapeResult.overall_label}`
-            : `${displayValue(properties.ai_decision || "查看地块属性")}${score}`;
+            : `${displayValue(properties.ai_decision || "保持不变")}${score}`;
         popupContent.append(title, detail);
         new maplibregl.Popup({ closeButton: false, offset: 8 })
           .setLngLat(event.lngLat)
@@ -405,14 +506,21 @@ export function SpatialMap({
     observer.observe(containerRef.current);
     return () => {
       observer.disconnect();
+      hoverPopup.remove();
       mapRef.current = null;
       map.remove();
     };
   }, [boundaryData, evaluationByBlockId, filteredData, isBoundaryMode, mode, onClearScenario]);
 
+  const selectedIsBoundary = selected?.layer_type === "urban_development_boundary";
   const selectedEntries = selected
     ? DETAIL_FIELDS
-      .filter(([key]) => selected[key] !== undefined && selected[key] !== null && selected[key] !== "")
+      .filter(([key]) => (
+        !(selectedIsBoundary && key === "boundary_name")
+        && selected[key] !== undefined
+        && selected[key] !== null
+        && selected[key] !== ""
+      ))
       .map(([key, label]) => [label, selected[key]] as const)
     : [];
 

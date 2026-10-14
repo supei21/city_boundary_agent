@@ -81,7 +81,6 @@ def _observation_summary(tool_name: str, payload: dict[str, Any]) -> str:
         return f"读取到 {len(payload.get('records', []))} 条街区记录"
     if tool_name == "evaluate_boundary_morphology":
         summary = payload.get("summary") or {}
-        grade_counts = summary.get("grade_counts") or {}
         risk_count = sum(
             bool(item.get("topology_check", {}).get("risk"))
             for item in payload.get("results", [])
@@ -90,7 +89,6 @@ def _observation_summary(tool_name: str, payload: dict[str, Any]) -> str:
             f"完成 {summary.get('evaluated_count', len(payload.get('results', [])))} 个地块形态评价，"
             f"改善 {summary.get('improved_count', 0)} 个、稳定 {summary.get('balanced_count', 0)} 个、"
             f"恶化 {summary.get('worsened_count', 0)} 个，拓扑风险 {risk_count} 个"
-            + (f"（五档统计已形成：{sum(grade_counts.values())} 个）" if grade_counts else "")
         )
     decisions = payload.get("decisions", [])
     summary = payload.get("summary") or {}
@@ -248,6 +246,10 @@ def run_tool_agent(
             cached_decisions = [
                 item for item in cached_decisions if item.get("decision") == "建议调出"
             ]
+        # Keep the tool response small for the model, but return the complete
+        # workflow result to downstream spatial rendering.  The target filter is
+        # only for the conversational answer, not for the map.
+        cached_decisions = list(cached_workflow.get("decisions", []))
         unique_decisions = {
             str(item.get("block_id")): item for item in cached_decisions
         }

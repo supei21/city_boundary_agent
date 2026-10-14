@@ -6,6 +6,7 @@ from boundary_agent.spatial.shapefile import (
     apply_constraint_layers,
     build_analysis_geojson,
     export_candidate_shapefile,
+    read_arcgis_feature_set,
     read_shapefile_zip,
     read_shapefile_zip_path,
 )
@@ -27,6 +28,7 @@ __all__ = [
     "apply_constraint_layers",
     "build_analysis_geojson",
     "export_candidate_shapefile",
+    "read_arcgis_feature_set",
     "read_shapefile_zip",
     "read_shapefile_zip_path",
     "LandscapeBoundary",

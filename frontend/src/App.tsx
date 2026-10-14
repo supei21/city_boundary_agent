@@ -3,8 +3,10 @@ import type { CSSProperties } from "react";
 import type { FeatureCollection } from "geojson";
 
 import {
+  streamCandidatePolicyFeasibility,
   evaluateLandscapeScenario,
   generatePolicyReport,
+  deleteUserModel,
   getArtifact,
   getLandscapeBoundaryGeoJson,
   getWorkspace,
@@ -22,6 +24,7 @@ import { LeftSidebar } from "./components/LeftSidebar";
 import { MainTabs } from "./components/MainTabs";
 import { MapView } from "./components/MapView";
 import { PolicyDocumentView } from "./components/PolicyDocumentView";
+import { PolicyIntelligenceView } from "./components/PolicyIntelligenceView";
 import { extractSpatial } from "./previewUtils";
 import type {
   ArtifactDetail,
@@ -32,6 +35,7 @@ import type {
   LandscapeProgress,
   LandscapeScenarioEvaluation,
   MainTabId,
+  PolicyFeasibilityProgress,
   StreamPacket,
   WorkspaceSummary,
 } from "./types";
@@ -64,6 +68,7 @@ export default function App() {
   const [landscapeEvaluation, setLandscapeEvaluation] = useState<LandscapeEvaluation | null>(null);
   const [landscapeScenarioEvaluation, setLandscapeScenarioEvaluation] = useState<LandscapeScenarioEvaluation | null>(null);
   const [landscapeProgress, setLandscapeProgress] = useState<LandscapeProgress | null>(null);
+  const [policyProgress, setPolicyProgress] = useState<PolicyFeasibilityProgress | null>(null);
   const [dataVersion, setDataVersion] = useState(0);
 
   const latestPolicyReport = workspace?.artifacts.find((item) => (
@@ -201,6 +206,7 @@ export default function App() {
           }));
           if (packet.result.decisions?.length) {
             setLastDecisions(packet.result.decisions);
+            setPolicyProgress(null);
           }
           if (packet.result.landscape_evaluation) {
             setLandscapeEvaluation(packet.result.landscape_evaluation);
@@ -222,6 +228,114 @@ export default function App() {
     }
   };
 
+  const handleCandidatePolicyFeasibility = async () => {
+    if (busy) return;
+    if (!lastDecisions.length) {
+      setActiveTab("chat");
+      setMessages((current) => [...current, {
+        id: crypto.randomUUID(),
+        role: "assistant",
+        content: "当前还没有候选地块。请先点击“候选地块分析”，完成后再运行政策可行性分析。",
+        error: true,
+      }]);
+      return;
+    }
+
+    const activeModelId = selectedModelId || workspace?.default_model_id || "local-rules";
+    const assistantId = crypto.randomUUID();
+    setActiveTab("chat");
+    setMessages((current) => [
+      ...current,
+      {
+        id: crypto.randomUUID(),
+        role: "user",
+        content: "请对本次候选地块自动开展政策可行性分析。",
+      },
+      {
+        id: assistantId,
+        role: "assistant",
+        content: "",
+        pending: true,
+        events: [{
+          phase: "understand",
+          title: "读取候选地块",
+          detail: `已接收 ${lastDecisions.length} 个分析结果，正在筛选调入、调出和需复核候选地块。`,
+          status: "running",
+          metadata: { model_id: activeModelId },
+        }],
+      },
+    ]);
+    setBusy(true);
+    setPolicyProgress({
+      phase: "preparing",
+      status: "running",
+      processed: 0,
+      completed: 0,
+      failed: 0,
+      total: lastDecisions.length,
+      percent: 0,
+      message: "正在准备候选地块政策可行性分析",
+    });
+    try {
+      updateAssistant(assistantId, (message) => ({
+        ...message,
+        events: [
+          ...(message.events ?? []).map((event) => ({ ...event, status: "completed" as const })),
+          {
+            phase: "action",
+            title: "执行政策可行性分析",
+            detail: "正在结合候选地块属性、刚性约束、Chroma 检索到的政策原文和大模型结构化判断逐地块分析。",
+            status: "running",
+            metadata: { model_id: activeModelId },
+          },
+        ],
+      }));
+      const result = await streamCandidatePolicyFeasibility(activeModelId, setPolicyProgress);
+      setLastDecisions(result.decisions);
+      if (result.spatial) setMapData(result.spatial);
+      if (result.artifact) selectArtifact(result.artifact);
+      await refreshWorkspace();
+      updateAssistant(assistantId, (message) => ({
+        ...message,
+        content: result.report,
+        pending: false,
+        events: [
+          ...(message.events ?? []).map((event) => ({ ...event, status: "completed" as const })),
+          {
+            phase: "answer",
+            title: "政策分析结果已写入地图",
+            detail: `完成 ${result.completed}/${result.total} 个候选地块；切换到地图“调入决策”后，悬停地块即可查看政策可行性。`,
+            status: result.failed ? "warning" : "completed",
+            metadata: { total: result.total, completed: result.completed, failed: result.failed },
+          },
+        ],
+      }));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "未知错误";
+      setPolicyProgress((current) => ({
+        phase: "error",
+        status: "error",
+        processed: current?.processed ?? 0,
+        completed: current?.completed ?? 0,
+        failed: current?.failed ?? 0,
+        total: current?.total ?? lastDecisions.length,
+        percent: current?.percent ?? 0,
+        message,
+      }));
+      updateAssistant(assistantId, (item) => ({
+        ...item,
+        content: `候选地块政策可行性分析失败：${message}`,
+        pending: false,
+        error: true,
+        events: (item.events ?? []).map((event) => (
+          event.status === "running" ? { ...event, status: "error" as const } : event
+        )),
+      }));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const handleUpload = async (file: File) => {
     setBusy(true);
     try {
@@ -231,6 +345,7 @@ export default function App() {
       setLandscapeEvaluation(null);
       setLandscapeScenarioEvaluation(null);
       setLandscapeProgress(null);
+      setPolicyProgress(null);
       setDataVersion((version) => version + 1);
       const uploaded = next.artifacts[0];
       if (uploaded) selectArtifact(uploaded);
@@ -261,6 +376,7 @@ export default function App() {
       setLandscapeEvaluation(null);
       setLandscapeScenarioEvaluation(null);
       setLandscapeProgress(null);
+      setPolicyProgress(null);
       const constraint = next.constraint_dataset;
       const boundary = next.landscape_boundary;
       setMessages((current) => [
@@ -272,7 +388,7 @@ export default function App() {
             `已加载约束数据 **${file.name}**，识别到 ${constraint.layer_count} 个约束图层。`,
             constraint.layers.length ? `图层：${constraint.layers.join("、")}` : "",
             boundary.loaded
-              ? `已将其中的城镇开发边界设为统一分析基准：${boundary.patch_count} 个斑块，约 ${boundary.area_km2.toFixed(2)} km²；现在可用于调入调出判定和形态评价。`
+              ? `已识别城镇开发边界：${boundary.patch_count} 个斑块，约 ${boundary.area_km2.toFixed(2)} km²；可用于边界形态评价。`
               : "未识别到城镇开发边界，形态评价暂不可用。",
             ...constraint.warnings.map((warning) => `- ${warning}`),
           ].filter(Boolean).join("\n"),
@@ -284,6 +400,12 @@ export default function App() {
     } finally {
       setBusy(false);
     }
+  };
+
+  const handleDeleteModel = async (modelId: string) => {
+    const next = await deleteUserModel(modelId);
+    setWorkspace(next);
+    setSelectedModelId(next.default_model_id);
   };
 
   const handleLandscapeAnalysis = async () => {
@@ -302,7 +424,7 @@ export default function App() {
       setMessages((current) => [...current, {
         id: crypto.randomUUID(),
         role: "assistant",
-        content: "最近一次候选地块分析中没有一级优先调入、二级优先调入或建议调出地块。请先完成调入调出分析，再运行边界形态评价。",
+        content: "最近一次分析中没有调入或调出候选地块。请先完成候选地块分析，再运行边界形态评价。",
         error: true,
       }]);
       return;
@@ -311,24 +433,23 @@ export default function App() {
       item.block_id,
       item.decision === "建议调出" ? "exclude" : "include",
     ])) as Record<string, "include" | "exclude">;
-    const userMessage: ChatMessage = {
-      id: crypto.randomUUID(),
-      role: "user",
-      content: `请对最近一次调入调出分析中的全部 ${selected.length} 个候选地块运行边界形态评价。`,
-    };
     const assistantId = crypto.randomUUID();
     setActiveTab("chat");
-    setMessages((current) => [...current, userMessage, {
+    setMessages((current) => [...current, {
+      id: crypto.randomUUID(),
+      role: "user",
+      content: `请对本次全部 ${selected.length} 个调入调出候选地块运行边界形态评价。`,
+    }, {
       id: assistantId,
       role: "assistant",
       content: "",
       pending: true,
       events: [{
         phase: "action",
-        title: "运行边界形态评价工具",
-        detail: `正在对全部 ${selected.length} 个调入调出候选逐地块计算六项景观指数，并检查孤岛和分裂风险。`,
+        title: "运行边界形态评价",
+        detail: `正在对 ${selected.length} 个候选地块计算六项景观指数并检查拓扑风险。`,
         status: "running",
-        metadata: { metric_count: 6 },
+        metadata: { candidate_count: selected.length, metric_count: 6 },
       }],
     }]);
     setBusy(true);
@@ -349,6 +470,7 @@ export default function App() {
         action: "auto",
       }, setLandscapeProgress);
       setLandscapeEvaluation(result);
+      setLandscapeScenarioEvaluation(null);
       const top = [...result.results]
         .sort((left, right) => right.demo_shape_score - left.demo_shape_score)
         .slice(0, 5);
@@ -364,16 +486,7 @@ export default function App() {
         ...message,
         content: lines.join("\n"),
         pending: false,
-        events: [
-          ...(message.events ?? []).map((event) => ({ ...event, status: "completed" as const })),
-          {
-            phase: "observe",
-            title: "形成形态评价结果",
-            detail: `已输出 ${result.summary.evaluated_count} 个地块的六项指数、三维评价和拓扑检查结果。`,
-            status: "completed",
-            metadata: result.summary,
-          },
-        ],
+        events: (message.events ?? []).map((event) => ({ ...event, status: "completed" as const })),
       }));
       const next = await refreshWorkspace();
       const artifact = next.artifacts.find((item) => item.id === result.artifact.id) ?? result.artifact;
@@ -553,6 +666,7 @@ export default function App() {
       setLandscapeEvaluation(null);
       setLandscapeScenarioEvaluation(null);
       setLandscapeProgress(null);
+      setPolicyProgress(null);
       setDataVersion((version) => version + 1);
     } finally {
       setBusy(false);
@@ -603,6 +717,7 @@ export default function App() {
               selectedModelId={selectedModelId}
               onModelChange={setSelectedModelId}
               onAddModel={() => setAddModelOpen(true)}
+              onDeleteModel={handleDeleteModel}
               onSend={handleSend}
               onOpenPreview={() => setPreviewOpen(true)}
             />
@@ -619,6 +734,14 @@ export default function App() {
           <div className="main-tab-panel" hidden={activeTab !== "policy"}>
             <PolicyDocumentView report={latestPolicyReport} />
           </div>
+          {activeTab === "policy_qa" && (
+            <div className="main-tab-panel">
+              <PolicyIntelligenceView
+                modelId={selectedModelId || workspace?.default_model_id || "local-rules"}
+                mode="qa"
+              />
+            </div>
+          )}
           {activeTab === "map" && !!workspace?.has_spatial_data && (
             <div className="main-tab-panel">
               <MapView
@@ -646,11 +769,15 @@ export default function App() {
         decisions={lastDecisions}
         busy={busy}
         landscapeProgress={landscapeProgress}
+        policyProgress={policyProgress}
         artifacts={workspace?.artifacts ?? []}
         selectedModelId={selectedModelId}
+        activeTab={activeTab}
         onRunAnalysis={() => handleSend("哪些街区适合调入开发边界？")}
+        onRunPolicyFeasibility={handleCandidatePolicyFeasibility}
         onRunLandscape={handleLandscapeAnalysis}
         onGeneratePolicyReport={handlePolicyReportGenerate}
+        onNavigate={setActiveTab}
         onClose={() => setPreviewOpen(false)}
       />
       <AddModelModal

@@ -1,8 +1,8 @@
 import { useState } from "react";
-import { BarChart3, CheckCircle2, ChevronDown, Download, Eye, FileText, Play, Shapes, X } from "lucide-react";
+import { BarChart3, Bot, CheckCircle2, ChevronDown, ChevronRight, Download, Eye, FileText, Play, Shapes, ShieldCheck, X } from "lucide-react";
 
 import { artifactDownloadUrl, artifactPreviewUrl } from "../api";
-import type { ArtifactSummary, Decision, LandscapeProgress, WorkspaceSummary } from "../types";
+import type { ArtifactSummary, Decision, LandscapeProgress, MainTabId, PolicyFeasibilityProgress, WorkspaceSummary } from "../types";
 
 interface Props {
   open: boolean;
@@ -10,11 +10,15 @@ interface Props {
   decisions: Decision[];
   busy: boolean;
   landscapeProgress: LandscapeProgress | null;
+  policyProgress: PolicyFeasibilityProgress | null;
   artifacts: ArtifactSummary[];
   selectedModelId: string;
+  activeTab: MainTabId;
   onRunAnalysis: () => void;
+  onRunPolicyFeasibility: () => void;
   onRunLandscape: () => void;
   onGeneratePolicyReport: () => void;
+  onNavigate: (tab: MainTabId) => void;
   onClose: () => void;
 }
 
@@ -29,10 +33,15 @@ const METRIC_LABELS: Record<string, string> = {
 const DIRECTORY_ITEMS = [
   { key: "analysis", icon: BarChart3, title: "候选地块分析", subtitle: "识别调入/调出候选地块" },
   { key: "landscape", icon: Shapes, title: "边界形态评价", subtitle: "比较调整前后的完整性与连续性" },
+  { key: "policy_feasibility", icon: ShieldCheck, title: "候选地块政策可行性分析", subtitle: "结合政策条文判断调入调出可行性" },
   { key: "report", icon: FileText, title: "报告生成", subtitle: "生成分析报告文档" },
 ] as const;
 
 type DirectoryKey = (typeof DIRECTORY_ITEMS)[number]["key"];
+
+const POLICY_DIRECTORY_ITEMS = [
+  { key: "policy_qa", icon: Bot, title: "政策问答", subtitle: "Chroma 检索与政策回答", target: "policy_qa" },
+] as const;
 
 function formatMetric(value: unknown) {
   return typeof value === "number" ? value.toFixed(3) : "";
@@ -51,11 +60,15 @@ export function AnalysisSidebar({
   decisions,
   busy,
   landscapeProgress,
+  policyProgress,
   artifacts,
   selectedModelId,
+  activeTab,
   onRunAnalysis,
+  onRunPolicyFeasibility,
   onRunLandscape,
   onGeneratePolicyReport,
+  onNavigate,
   onClose,
 }: Props) {
   const [expandedKey, setExpandedKey] = useState<DirectoryKey | null>("report");
@@ -76,6 +89,9 @@ export function AnalysisSidebar({
   const hasAdjustmentCandidates = decisions.some((item) =>
     ["一级优先调入", "二级优先调入", "建议调出"].includes(item.decision),
   );
+  const adjustmentCandidateCount = decisions.filter((item) =>
+    ["一级优先调入", "二级优先调入", "建议调出"].includes(item.decision),
+  ).length;
 
   const toggle = (key: DirectoryKey) => {
     setExpandedKey((current) => (current === key ? null : key));
@@ -92,6 +108,27 @@ export function AnalysisSidebar({
       </header>
 
       <div className="analysis-scroll">
+        <div className="policy-directory-links">
+          {POLICY_DIRECTORY_ITEMS.map((item) => {
+            const Icon = item.icon;
+            return (
+              <button
+                type="button"
+                key={item.key}
+                className={`directory-header policy-directory-link policy-directory-link-${item.key} ${activeTab === item.target ? "active" : ""}`}
+                onClick={() => onNavigate(item.target)}
+                title={item.title}
+              >
+                <Icon size={16} />
+                <div className="directory-header-copy">
+                  <strong>{item.title}</strong>
+                  <small>{item.subtitle}</small>
+                </div>
+                <ChevronRight size={15} />
+              </button>
+            );
+          })}
+        </div>
         {DIRECTORY_ITEMS.map((item) => {
           const Icon = item.icon;
           const isOpen = expandedKey === item.key;
@@ -99,7 +136,7 @@ export function AnalysisSidebar({
             ? `已加载 ${policyDocuments.length} 份参考文档`
             : item.subtitle;
           return (
-            <section className={`directory-item ${isOpen ? "open" : ""}`} key={item.key}>
+            <section className={`directory-item directory-item-${item.key} ${isOpen ? "open" : ""}`} key={item.key}>
               <button
                 className="directory-header"
                 onClick={() => toggle(item.key)}
@@ -254,13 +291,67 @@ export function AnalysisSidebar({
                     </div>
                   )}
                   {workspace?.has_spatial_data && workspace?.landscape_boundary.loaded && hasAdjustmentCandidates && (
-                    <p className="report-hint">需要评价联动地块时，请进入“地图—形态评价”，点击下拉框旁的“创建组合情景”后多选地块。</p>
+                    <p className="report-hint">如需评价多个地块的组合影响，请依次进入“地图”→“调入决策”→将“显示内容”切换为“形态评价”，再点击“创建组合情景”多选地块。</p>
                   )}
                   {(!workspace?.has_spatial_data || !workspace?.landscape_boundary.loaded) && (
                     <p className="report-hint">需要先上传候选地块SHP ZIP，以及包含城镇开发边界的约束数据SHP ZIP。</p>
                   )}
                   {workspace?.has_spatial_data && workspace?.landscape_boundary.loaded && !hasAdjustmentCandidates && (
                     <p className="report-hint">请先完成候选地块调入调出分析；形态评价只处理一级优先调入、二级优先调入和建议调出地块。</p>
+                  )}
+                </div>
+              )}
+
+              {isOpen && item.key === "policy_feasibility" && (
+                <div className="directory-body">
+                  <p className="analysis-note">只分析候选地块分析产生的调入、调出地块。系统先在本地检查少量硬约束，再统一检索 Chroma 政策条文，并按批次交给大模型生成结构化判断。</p>
+
+                  <section className="analysis-card">
+                    <h3>分析范围</h3>
+                    <div className="status-table">
+                      <div><span>调入调出候选</span><strong>{adjustmentCandidateCount} 个</strong></div>
+                      <div><span>保持不变地块</span><strong>不参与</strong></div>
+                      <div><span>政策检索</span><strong>Chroma 一次检索</strong></div>
+                      <div><span>大模型判断</span><strong>每批 5 个地块</strong></div>
+                    </div>
+                  </section>
+
+                  <button
+                    className="run-analysis-button"
+                    onClick={onRunPolicyFeasibility}
+                    disabled={busy || !hasAdjustmentCandidates}
+                    title={!hasAdjustmentCandidates ? "请先完成候选地块分析" : "开始政策可行性分析"}
+                  >
+                    {busy ? <CheckCircle2 size={17} /> : <Play size={17} />}
+                    <span>{busy ? "正在分析..." : policyProgress?.status === "completed" ? "重新分析政策可行性" : "开始政策可行性分析"}</span>
+                  </button>
+
+                  {policyProgress && (
+                    <div className={`landscape-progress policy-progress ${policyProgress.status}`} aria-live="polite">
+                      <div className="landscape-progress-heading">
+                        <span>{policyProgress.message}</span>
+                        <strong>{policyProgress.percent.toFixed(1)}%</strong>
+                      </div>
+                      <div
+                        className="landscape-progress-track"
+                        role="progressbar"
+                        aria-valuemin={0}
+                        aria-valuemax={100}
+                        aria-valuenow={policyProgress.percent}
+                      >
+                        <span style={{ width: `${Math.min(100, Math.max(0, policyProgress.percent))}%` }} />
+                      </div>
+                      <div className="landscape-progress-meta">
+                        <span>{policyProgress.processed} / {policyProgress.total} 个候选地块</span>
+                        {policyProgress.total_batches ? (
+                          <span>批次 {policyProgress.current_batch ?? 0} / {policyProgress.total_batches}</span>
+                        ) : null}
+                      </div>
+                    </div>
+                  )}
+
+                  {!hasAdjustmentCandidates && (
+                    <p className="report-hint">请先运行候选地块分析；保持不变地块不会进入政策可行性判断。</p>
                   )}
                 </div>
               )}

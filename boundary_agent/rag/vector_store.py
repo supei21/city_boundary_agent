@@ -10,11 +10,15 @@ from boundary_agent.rag.documents import PolicyDocument, load_documents
 from boundary_agent.rag.embeddings import cosine_similarity, embed_text
 
 
-_INDEX_CACHE: dict[tuple[str, str, int, int, int], dict[str, Any]] = {}
-_SEARCH_CACHE: dict[tuple[str, str, int, int, int], "PolicySearchBackend"] = {}
+_INDEX_CACHE: dict[tuple[str, int, int, int], dict[str, Any]] = {}
+_SEARCH_CACHE: dict[tuple[str, int, int, int], "PolicySearchBackend"] = {}
 
 
 def search_policy_documents(query: str, settings: PolicyRagSettings, k: int | None = None) -> list[dict[str, Any]]:
+    if settings.backend.lower() == "chroma":
+        from boundary_agent.rag.chroma_store import get_chroma_store
+
+        return get_chroma_store(settings).dual_search(query, max(1, k or settings.retrieval_k))[: max(1, k or settings.retrieval_k)]
     backend = load_search_backend(settings)
     return backend.search(query, max(1, k or settings.retrieval_k))
 
@@ -49,8 +53,7 @@ class PolicySearchBackend:
             scored = self._search_nearest_neighbors(query_vector, candidate_count)
         else:
             scored = self._search_linear(query_vector, candidate_count)
-        balanced = _select_balanced_results(scored, k)
-        return [_format_result(score, item) for score, item in balanced]
+        return [_format_result(score, item) for score, item in scored[:k]]
 
     def _build_nearest_neighbors(self) -> None:
         try:
@@ -100,45 +103,6 @@ def _format_result(score: float, item: dict[str, Any]) -> dict[str, Any]:
         "article_ref": item["metadata"].get("article_ref"),
         "content": item["content"],
     }
-
-
-def _select_balanced_results(
-    scored: list[tuple[float, dict[str, Any]]],
-    k: int,
-) -> list[tuple[float, dict[str, Any]]]:
-    """Keep high-scoring rules while guaranteeing readable policy-file evidence."""
-
-    if k <= 0:
-        return []
-    policies: list[tuple[float, dict[str, Any]]] = []
-    rules: list[tuple[float, dict[str, Any]]] = []
-    others: list[tuple[float, dict[str, Any]]] = []
-    seen_policy_sources: set[str] = set()
-    for pair in scored:
-        item_type = str(pair[1].get("metadata", {}).get("type") or "")
-        if item_type == "policy":
-            source = str(pair[1].get("metadata", {}).get("source") or "")
-            if source in seen_policy_sources:
-                continue
-            seen_policy_sources.add(source)
-            policies.append(pair)
-        elif item_type == "rule":
-            rules.append(pair)
-        else:
-            others.append(pair)
-
-    policy_target = min(len(policies), max(1, k // 2))
-    rule_target = min(len(rules), k - policy_target)
-    selected = policies[:policy_target] + rules[:rule_target]
-    selected_ids = {id(item) for _, item in selected}
-    for pair in sorted(scored + others, key=lambda value: value[0], reverse=True):
-        if len(selected) >= k:
-            break
-        if id(pair[1]) in selected_ids:
-            continue
-        selected.append(pair)
-        selected_ids.add(id(pair[1]))
-    return sorted(selected, key=lambda value: value[0], reverse=True)[:k]
 
 
 def search_policy_documents_linear(query: str, settings: PolicyRagSettings, k: int | None = None) -> list[dict[str, Any]]:
@@ -198,10 +162,9 @@ def documents_hash(docs: list[PolicyDocument]) -> str:
     return digest.hexdigest()
 
 
-def _settings_cache_key(settings: PolicyRagSettings) -> tuple[str, str, int, int, int]:
+def _settings_cache_key(settings: PolicyRagSettings) -> tuple[str, int, int, int]:
     return (
         str(settings.policy_dir.resolve()),
-        str(settings.rules_path.resolve()),
         settings.retrieval_k,
         settings.chunk_size,
         settings.chunk_overlap,

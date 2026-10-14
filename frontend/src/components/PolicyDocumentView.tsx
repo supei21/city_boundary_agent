@@ -77,6 +77,7 @@ export function PolicyDocumentView({ report }: Props) {
     if (result.document_id) setSelectedId(result.document_id);
   };
 
+
   return (
     <section className="policy-document-view">
       <header className="policy-document-toolbar">
