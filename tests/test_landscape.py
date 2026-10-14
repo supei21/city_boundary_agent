@@ -19,6 +19,7 @@ from boundary_agent.spatial.landscape import (
     _metric_assessments,
     _overall_grade,
     _planning_evaluation_geometry,
+    _scenario_metric_assessments,
     calculate_landscape_metrics,
     evaluate_landscape_change,
     evaluate_landscape_scenario,
@@ -131,8 +132,58 @@ class LandscapeMetricsTest(unittest.TestCase):
             item["grade"] != "significantly_worsened"
             for item in dimensions.values()
         ))
-        grade, _ = _overall_grade(dimensions, {"risk": True})
+        grade, score = _overall_grade(dimensions, {"risk": True})
+        self.assertEqual(score, -0.666667)
         self.assertEqual(grade, "slightly_worsened")
+        self.assertEqual(dimensions["fragmentation"]["grade"], "slightly_worsened")
+
+    def test_reduced_overall_consensus_rule_keeps_topology_separate(self):
+        topology = {"risk": True, "status": "island"}
+
+        one_slight = {
+            "continuity": {"score": 0},
+            "fragmentation": {"score": -1},
+            "regularity": {"score": 0},
+        }
+        grade, score = _overall_grade(one_slight, topology)
+        self.assertEqual(score, -0.333333)
+        self.assertEqual(grade, "stable")
+
+        two_slight = {
+            "continuity": {"score": 0},
+            "fragmentation": {"score": -1},
+            "regularity": {"score": -1},
+        }
+        grade, score = _overall_grade(two_slight, topology)
+        self.assertEqual(score, -0.666667)
+        self.assertEqual(grade, "slightly_worsened")
+
+        one_significant = {
+            "continuity": {"score": 0},
+            "fragmentation": {"score": -2},
+            "regularity": {"score": 0},
+        }
+        grade, _ = _overall_grade(one_significant, topology)
+        self.assertEqual(grade, "slightly_worsened")
+
+        significant_with_opposite_slight = {
+            "continuity": {"score": 1},
+            "fragmentation": {"score": -2},
+            "regularity": {"score": 0},
+        }
+        grade, _ = _overall_grade(significant_with_opposite_slight, topology)
+        self.assertEqual(grade, "slightly_worsened")
+
+        two_significant = {
+            "continuity": {"score": 0},
+            "fragmentation": {"score": -2},
+            "regularity": {"score": -2},
+        }
+        grade, _ = _overall_grade(two_significant, topology)
+        self.assertEqual(grade, "significantly_worsened")
+
+        self.assertTrue(topology["risk"])
+        self.assertEqual(topology["status"], "island")
 
     def test_single_block_pd_thresholds_do_not_change_other_metric_thresholds(self):
         before = {
@@ -188,6 +239,41 @@ class LandscapeMetricsTest(unittest.TestCase):
         self.assertEqual(assessments["AI"]["strength"], "slight")
         self.assertEqual(assessments["LPI"]["state"], "unchanged")
         self.assertEqual(assessments["LPI"]["strength"], "stable")
+
+    def test_combination_thresholds_use_relative_np_and_wider_lpi_lsi_bands(self):
+        before = {
+            "NP": 355.0, "PD": 22.0, "LPI": 28.220828,
+            "ED": 16.0, "LSI": 16.632231, "AI": 97.0,
+        }
+        after = {
+            **before,
+            "NP": 349.0,
+            "LPI": 28.224402,
+            "LSI": 16.786037,
+        }
+        assessments = _scenario_metric_assessments(
+            before,
+            after,
+            stable_relative_threshold=0.0005,
+            significant_relative_threshold=0.005,
+            stable_percentage_point_threshold=0.01,
+            significant_percentage_point_threshold=0.1,
+            significant_np_change=2,
+            scenario_stable_np_relative_threshold=0.01,
+            scenario_significant_np_relative_threshold=0.05,
+            scenario_stable_lpi_percentage_point_threshold=0.05,
+            scenario_significant_lpi_percentage_point_threshold=0.5,
+            scenario_stable_lsi_relative_threshold=0.002,
+            scenario_significant_lsi_relative_threshold=0.01,
+        )
+
+        self.assertEqual(assessments["NP"]["threshold_basis"], "relative")
+        self.assertEqual(assessments["NP"]["strength"], "slight")
+        self.assertEqual(assessments["NP"]["score"], 1)
+        self.assertEqual(assessments["LPI"]["strength"], "stable")
+        self.assertEqual(assessments["LPI"]["score"], 0)
+        self.assertEqual(assessments["LSI"]["strength"], "slight")
+        self.assertEqual(assessments["LSI"]["score"], -1)
 
     def test_metrics_distinguish_split_and_compact_patterns(self):
         split = np.zeros((10, 10), dtype=bool)

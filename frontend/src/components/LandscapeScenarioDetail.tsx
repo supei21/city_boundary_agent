@@ -1,5 +1,6 @@
 import type { LandscapeScenarioEvaluation } from "../types";
 import {
+  AUXILIARY_LANDSCAPE_METRICS,
   formatLandscapeMetric,
   LANDSCAPE_METRICS,
   landscapeAssessmentLabel,
@@ -38,6 +39,26 @@ export function LandscapeScenarioDetail({ evaluation }: { evaluation: LandscapeS
         </tbody>
       </table>
 
+      <p className="landscape-table-note">辅助观测（不参与综合等级）</p>
+      <table className="map-landscape-metrics" aria-label="组合情景辅助景观指数">
+        <thead><tr><th>指标</th><th>调整前</th><th>调整后</th><th>变化</th><th>判断</th></tr></thead>
+        <tbody>
+          {AUXILIARY_LANDSCAPE_METRICS.map((metric) => {
+            const assessment = scenario.metric_assessments[metric.key];
+            const delta = scenario.delta[metric.key];
+            return (
+              <tr className={assessment?.state ?? "unchanged"} key={metric.key}>
+                <th>{metric.key}{metric.direction}</th>
+                <td>{formatLandscapeMetric(scenario.before[metric.key])}</td>
+                <td>{formatLandscapeMetric(scenario.after[metric.key])}</td>
+                <td>{delta > 0 ? "+" : ""}{formatLandscapeMetric(delta)}</td>
+                <td>{landscapeAssessmentLabel(assessment)}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+
       {scenario.expansion_pattern && (
         <div className="map-landscape-topology safe">
           <span>组合调入关系</span>
@@ -53,7 +74,7 @@ export function LandscapeScenarioDetail({ evaluation }: { evaluation: LandscapeS
       </div>
 
       <p className="map-landscape-conclusion">{scenario.conclusion}</p>
-      <p className="landscape-table-note">所选地块先作为一个整体作用于完整现状城镇开发边界，再计算调整前后的六项全域形态指标；组合方案PD和AI均继续采用原阈值。</p>
+      <p className="landscape-table-note">所选地块先作为一个整体作用于完整现状城镇开发边界；组合专用阈值：NP相对变化1%以下稳定、5%以上明显，LPI变化0.05个百分点以下稳定、0.5个百分点以上明显，LSI相对变化0.2%以下稳定、1%以上明显；PD、ED、AI仅作辅助观测。</p>
     </section>
   );
 }

@@ -34,18 +34,21 @@ METRIC_DIRECTIONS = {
     "AI": 1,
 }
 
+CORE_METRICS = ("NP", "LPI", "LSI")
+AUXILIARY_METRICS = ("PD", "ED", "AI")
+
 DIMENSION_METRICS = {
     "continuity": {
         "label": "连续完整性",
-        "metrics": ("NP", "LPI"),
+        "metrics": ("LPI",),
     },
     "fragmentation": {
-        "label": "破碎聚合性",
-        "metrics": ("PD", "AI"),
+        "label": "破碎程度",
+        "metrics": ("NP",),
     },
     "regularity": {
         "label": "边界规整性",
-        "metrics": ("ED", "LSI"),
+        "metrics": ("LSI",),
     },
 }
 
@@ -960,14 +963,102 @@ def _metric_assessments(
     return assessments
 
 
-def _grade_from_score(score: float) -> str:
-    if score >= 1.5:
+def _scenario_metric_assessments(
+    before: dict[str, float],
+    after: dict[str, float],
+    stable_relative_threshold: float,
+    significant_relative_threshold: float,
+    stable_percentage_point_threshold: float,
+    significant_percentage_point_threshold: float,
+    significant_np_change: int,
+    scenario_stable_np_relative_threshold: float,
+    scenario_significant_np_relative_threshold: float,
+    scenario_stable_lpi_percentage_point_threshold: float,
+    scenario_significant_lpi_percentage_point_threshold: float,
+    scenario_stable_lsi_relative_threshold: float,
+    scenario_significant_lsi_relative_threshold: float,
+) -> dict[str, dict[str, Any]]:
+    """Apply scale-aware thresholds to the three core scenario metrics.
+
+    Auxiliary metrics keep the ordinary full-boundary thresholds because they
+    are descriptive only.  NP uses relative change for a multi-parcel scenario
+    so that changing two patches does not have the same meaning against a
+    10-patch and a 300-patch baseline.
+    """
+
+    assessments = _metric_assessments(
+        before,
+        after,
+        stable_relative_threshold,
+        significant_relative_threshold,
+        stable_percentage_point_threshold,
+        significant_percentage_point_threshold,
+        significant_np_change,
+    )
+    thresholds = {
+        "NP": (
+            scenario_stable_np_relative_threshold,
+            scenario_significant_np_relative_threshold,
+            "relative",
+        ),
+        "LPI": (
+            scenario_stable_lpi_percentage_point_threshold,
+            scenario_significant_lpi_percentage_point_threshold,
+            "percentage_point",
+        ),
+        "LSI": (
+            scenario_stable_lsi_relative_threshold,
+            scenario_significant_lsi_relative_threshold,
+            "relative",
+        ),
+    }
+    for metric, (stable_threshold, significant_threshold, threshold_basis) in thresholds.items():
+        delta = after[metric] - before[metric]
+        oriented = METRIC_DIRECTIONS[metric] * delta
+        magnitude = (
+            abs(delta)
+            if threshold_basis == "percentage_point"
+            else abs(delta) / max(abs(before[metric]), 1.0)
+        )
+        if magnitude < stable_threshold:
+            strength = "stable"
+        elif magnitude >= significant_threshold:
+            strength = "significant"
+        else:
+            strength = "slight"
+
+        if strength == "stable" or abs(oriented) <= 1e-9:
+            state = "unchanged"
+            score = 0
+        elif oriented > 0:
+            state = "improved"
+            score = 2 if strength == "significant" else 1
+        else:
+            state = "worsened"
+            score = -2 if strength == "significant" else -1
+        assessments[metric] = {
+            "state": state,
+            "strength": strength,
+            "score": score,
+            "threshold_basis": threshold_basis,
+            "relative_change": round(abs(delta) / max(abs(before[metric]), 1.0), 6),
+            "absolute_change": round(abs(delta), 6),
+        }
+    return assessments
+
+
+def _grade_from_score(
+    score: float,
+    stable_threshold: float = 0.5,
+    significant_threshold: float = 1.5,
+) -> str:
+    if score >= significant_threshold:
         return "significantly_improved"
-    if score >= 0.5:
+    if score >= stable_threshold:
         return "slightly_improved"
-    if score <= -1.5:
+    if score <= -significant_threshold:
         return "significantly_worsened"
-    if score <= -0.5:
+    if score <= -stable_threshold:
         return "slightly_worsened"
     return "stable"
 
@@ -1151,18 +1242,30 @@ def _overall_grade(
     topology: dict[str, Any],
 ) -> tuple[str, float]:
     del topology  # Topology is reported independently and no longer overrides magnitude.
-    dimension_score = (
-        sum(float(item["score"]) for item in dimensions.values()) / len(dimensions)
-        if dimensions
-        else 0.0
-    )
-    return _grade_from_score(dimension_score), round(dimension_score, 6)
+    scores = [float(item["score"]) for item in dimensions.values()]
+    if not scores:
+        return "stable", 0.0
+    total_score = sum(scores)
+    average_score = total_score / len(scores)
+    significant_improvements = sum(score == 2 for score in scores)
+    significant_worsenings = sum(score == -2 for score in scores)
+    if significant_improvements >= 2 or total_score >= 5:
+        grade = "significantly_improved"
+    elif significant_worsenings >= 2 or total_score <= -5:
+        grade = "significantly_worsened"
+    elif total_score >= 2 or (significant_improvements >= 1 and significant_worsenings == 0):
+        grade = "slightly_improved"
+    elif total_score <= -2 or (significant_worsenings >= 1 and significant_improvements == 0):
+        grade = "slightly_worsened"
+    else:
+        grade = "stable"
+    return grade, round(average_score, 6)
 
 
 def _shape_score(metric_assessments: dict[str, dict[str, Any]], topology: dict[str, Any]) -> float:
     del topology  # Keep this legacy display score independent from topology risk.
-    metric_score = sum(int(item["score"]) for item in metric_assessments.values())
-    score = 50 + metric_score / (len(METRIC_DIRECTIONS) * 2) * 50
+    metric_score = sum(int(metric_assessments[metric]["score"]) for metric in CORE_METRICS)
+    score = 50 + metric_score / (len(CORE_METRICS) * 2) * 50
     return round(float(np.clip(score, 0, 100)), 2)
 
 
@@ -1301,7 +1404,7 @@ def evaluate_landscape_change(
             f"{item['label']}{item['grade_label']}" for item in dimensions.values()
         )
         if changed_area.is_empty:
-            conclusion = "候选地块没有形成实际边界变化，六项指标保持不变。"
+            conclusion = "候选地块没有形成实际边界变化，三项核心指标保持不变。"
         else:
             risk_text = topology["risk_label"]
             expansion_text = f"{expansion['label']}（LEI={expansion['index']:.2f}）" if expansion else ""
@@ -1485,6 +1588,12 @@ def evaluate_landscape_scenario(
     significant_percentage_point_threshold: float = 0.1,
     significant_np_change: int = 2,
     adjacency_tolerance_m: float = 300.0,
+    scenario_stable_np_relative_threshold: float = 0.01,
+    scenario_significant_np_relative_threshold: float = 0.05,
+    scenario_stable_lpi_percentage_point_threshold: float = 0.05,
+    scenario_significant_lpi_percentage_point_threshold: float = 0.5,
+    scenario_stable_lsi_relative_threshold: float = 0.002,
+    scenario_significant_lsi_relative_threshold: float = 0.01,
 ) -> dict[str, Any]:
     """Apply a multi-parcel scenario, then compare the complete boundaries."""
 
@@ -1549,7 +1658,7 @@ def evaluate_landscape_scenario(
         adjusted_cells,
     )
     delta = {metric: round(after[metric] - before[metric], 6) for metric in METRIC_DIRECTIONS}
-    metric_assessments = _metric_assessments(
+    metric_assessments = _scenario_metric_assessments(
         before,
         after,
         stable_relative_threshold,
@@ -1557,6 +1666,12 @@ def evaluate_landscape_scenario(
         stable_percentage_point_threshold,
         significant_percentage_point_threshold,
         significant_np_change,
+        scenario_stable_np_relative_threshold,
+        scenario_significant_np_relative_threshold,
+        scenario_stable_lpi_percentage_point_threshold,
+        scenario_significant_lpi_percentage_point_threshold,
+        scenario_stable_lsi_relative_threshold,
+        scenario_significant_lsi_relative_threshold,
     )
     dimensions = _dimension_assessments(metric_assessments)
     topology = _topology_check(
@@ -1619,7 +1734,7 @@ def evaluate_landscape_scenario(
         for status in ("direct", "conditional", "isolated", "removal_member")
     }
     if changed_area.is_empty:
-        conclusion = "所选地块没有形成实际边界变化，六项指标保持不变。"
+        conclusion = "所选地块没有形成实际边界变化，三项核心指标保持不变。"
     else:
         risk_text = topology["risk_label"]
         expansion_text = f"{expansion['label']}（LEI={expansion['index']:.2f}）" if expansion else ""
@@ -1637,6 +1752,24 @@ def evaluate_landscape_scenario(
         "changed_area_km2": round(float(changed_area.area / 1_000_000), 6),
         "evaluation_scope": "full_boundary",
         "reference_boundary_area_km2": round(float(boundary_geometry.area / 1_000_000), 6),
+        "threshold_profile": {
+            "name": "combination_scale_aware",
+            "NP": {
+                "basis": "relative",
+                "stable_below": scenario_stable_np_relative_threshold,
+                "significant_at_or_above": scenario_significant_np_relative_threshold,
+            },
+            "LPI": {
+                "basis": "percentage_point",
+                "stable_below": scenario_stable_lpi_percentage_point_threshold,
+                "significant_at_or_above": scenario_significant_lpi_percentage_point_threshold,
+            },
+            "LSI": {
+                "basis": "relative",
+                "stable_below": scenario_stable_lsi_relative_threshold,
+                "significant_at_or_above": scenario_significant_lsi_relative_threshold,
+            },
+        },
         "planning_evaluation": {
             "method": "validated_local_gap_fill",
             "tolerance_m": adjacency_tolerance_m,

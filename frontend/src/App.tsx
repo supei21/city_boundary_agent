@@ -326,7 +326,7 @@ export default function App() {
       events: [{
         phase: "action",
         title: "运行边界形态评价工具",
-        detail: `正在对全部 ${selected.length} 个调入调出候选逐地块计算六项景观指数，并检查孤岛和分裂风险。`,
+        detail: `正在对全部 ${selected.length} 个调入调出候选逐地块计算NP、LPI、LSI核心指标，并检查孤岛和分裂风险。`,
         status: "running",
         metadata: { metric_count: 6 },
       }],
@@ -369,7 +369,7 @@ export default function App() {
           {
             phase: "observe",
             title: "形成形态评价结果",
-            detail: `已输出 ${result.summary.evaluated_count} 个地块的六项指数、三维评价和拓扑检查结果。`,
+            detail: `已输出 ${result.summary.evaluated_count} 个地块的三项核心指标、辅助观测和拓扑检查结果。`,
             status: "completed",
             metadata: result.summary,
           },

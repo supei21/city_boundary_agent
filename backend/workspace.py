@@ -417,35 +417,42 @@ class DemoWorkspace:
                 ) if results else 0,
                 "metric_directions": {
                     "NP": "下降为改善",
-                    "PD": "下降为改善",
                     "LPI": "上升为改善",
-                    "ED": "下降为改善",
                     "LSI": "下降为改善",
-                    "AI": "上升为改善",
+                },
+                "auxiliary_metrics": {
+                    "PD": "辅助观测，不参与综合等级",
+                    "ED": "辅助观测，不参与综合等级",
+                    "AI": "辅助观测，不参与综合等级",
                 },
                 "methodology": {
                     "scope": "以完整现状城镇开发边界为调整前对象，将候选地块调入或调出后形成完整调整后边界并进行全域对比",
                     "administrative_boundary": "不参与计算；实际调入调出面积仍以原始城镇开发边界和街区几何为准",
-                    "planning_geometry": f"六项指标统一采用规划评价几何：对不超过{adjacency_tolerance_m:g}米的相邻面逐对进行局部闭合验证，仅当相对边能够形成连续面时填补线性间隙；仅尖角接近不强制连接，辅助填补面积不计作实际调入面积",
-                    "rasterization": "AI依据规划评价几何，采用统一坐标原点对齐的像元中心判定；NP、PD、LPI、ED、LSI依据同一规划评价几何计算",
+                    "planning_geometry": f"全部指标统一采用规划评价几何：对不超过{adjacency_tolerance_m:g}米的相邻面逐对进行局部闭合验证，仅当相对边能够形成连续面时填补线性间隙；仅尖角接近不强制连接，辅助填补面积不计作实际调入面积",
+                    "rasterization": "NP、LPI、LSI为综合评价核心指标；PD、ED、AI继续计算并作为辅助观测，其中AI依据统一坐标原点对齐的像元中心判定",
                     "dimensions": {
-                        "continuity": "连续完整性：NP、LPI",
-                        "fragmentation": "破碎聚合性：PD、AI",
-                        "regularity": "边界规整性：ED、LSI",
+                        "continuity": "连续完整性：LPI",
+                        "fragmentation": "破碎程度：NP",
+                        "regularity": "边界规整性：LSI",
                     },
                     "topology_rules": {
-                        "include": f"使用与六项指标相同的局部闭合验证，检查调入地块能否在{adjacency_tolerance_m:g}米内直接或经其他候选地块连接现状边界",
-                        "exclude": f"使用与六项指标相同的规划评价几何，检查调出后是否造成原边界分裂",
+                        "include": f"使用与形态指标相同的局部闭合验证，检查调入地块能否在{adjacency_tolerance_m:g}米内直接或经其他候选地块连接现状边界",
+                        "exclude": f"使用与形态指标相同的规划评价几何，检查调出后是否造成原边界分裂",
                     },
                     "change_thresholds": {
-                        "NP": "变化0为稳定、变化1为轻微、变化达到2为明显",
+                        "NP_single": "单地块变化0为稳定、变化1为轻微、变化达到2为明显",
+                        "NP_scenario": "组合方案相对变化小于1%为稳定、1%至5%为轻微、达到5%为明显",
                         "PD_single": "单地块相对变化小于0.005%为稳定、0.005%至0.1%为轻微、达到0.1%为明显",
                         "PD_scenario": "组合方案相对变化小于0.05%为稳定、0.05%至0.5%为轻微、达到0.5%为明显",
-                        "ED_LSI": "相对变化小于0.05%为稳定、0.05%至0.5%为轻微、达到0.5%为明显",
-                        "LPI": "绝对变化小于0.01个百分点为稳定、0.01至0.1个百分点为轻微、达到0.1个百分点为明显",
+                        "ED": "相对变化小于0.05%为稳定、0.05%至0.5%为轻微、达到0.5%为明显",
+                        "LSI_single": "单地块相对变化小于0.05%为稳定、0.05%至0.5%为轻微、达到0.5%为明显",
+                        "LSI_scenario": "组合方案相对变化小于0.2%为稳定、0.2%至1%为轻微、达到1%为明显",
+                        "LPI_single": "单地块绝对变化小于0.01个百分点为稳定、0.01至0.1个百分点为轻微、达到0.1个百分点为明显",
+                        "LPI_scenario": "组合方案绝对变化小于0.05个百分点为稳定、0.05至0.5个百分点为轻微、达到0.5个百分点为明显",
                         "AI_single": "单地块绝对变化小于0.001个百分点为稳定、0.001至0.02个百分点为轻微、达到0.02个百分点为明显",
                         "AI_scenario": "组合方案绝对变化小于0.01个百分点为稳定、0.01至0.1个百分点为轻微、达到0.1个百分点为明显",
                         "dimension": "维度内指标得分取平均，绝对均值小于0.5为稳定、0.5至1.5为轻微、达到1.5为明显",
+                        "overall": "NP、LPI、LSI分别代表破碎程度、连续完整性和边界规整性；单个轻微变化视为局部波动，三项得分净和达到±2或单项出现未被反向明显变化抵消的明显变化时判为轻微影响，至少两个指标同向明显变化时判为明显影响",
                         "topology": "拓扑风险独立报告，不再强制覆盖全域形态影响等级",
                     },
                     "NP": "统一规划评价几何中的有效独立斑块数",
@@ -455,7 +462,7 @@ class DemoWorkspace:
                     "LSI": "0.25×边界长度/开发边界面积平方根",
                     "AI_unit": "%（同类四邻接数占紧凑布局最大邻接数）",
                 },
-                "note": f"每个候选地块均实际作用于完整现状城镇开发边界后独立评价；单地块PD采用0.005%/0.1%阈值，AI采用0.001/0.02个百分点阈值，NP、LPI、ED、LSI沿用既有规则；拓扑和六项指标统一使用经{adjacency_tolerance_m:g}米逐对局部闭合验证得到的规划评价几何。",
+                "note": f"每个候选地块均实际作用于完整现状城镇开发边界后独立评价；综合等级仅使用NP、LPI、LSI三个核心指标，PD、ED、AI继续计算但仅作辅助观测；拓扑风险独立保留；全部指标统一使用经{adjacency_tolerance_m:g}米逐对局部闭合验证得到的规划评价几何。",
             }
             spatial = build_landscape_results_geojson(self.spatial_dataset.original, results)
             payload = {
@@ -520,6 +527,24 @@ class DemoWorkspace:
                 significant_percentage_point_threshold=float(config.get("significant_percentage_point_threshold", 0.1)),
                 significant_np_change=int(config.get("significant_np_change", 2)),
                 adjacency_tolerance_m=adjacency_tolerance_m,
+                scenario_stable_np_relative_threshold=float(
+                    config.get("scenario_stable_np_relative_threshold", 0.01)
+                ),
+                scenario_significant_np_relative_threshold=float(
+                    config.get("scenario_significant_np_relative_threshold", 0.05)
+                ),
+                scenario_stable_lpi_percentage_point_threshold=float(
+                    config.get("scenario_stable_lpi_percentage_point_threshold", 0.05)
+                ),
+                scenario_significant_lpi_percentage_point_threshold=float(
+                    config.get("scenario_significant_lpi_percentage_point_threshold", 0.5)
+                ),
+                scenario_stable_lsi_relative_threshold=float(
+                    config.get("scenario_stable_lsi_relative_threshold", 0.002)
+                ),
+                scenario_significant_lsi_relative_threshold=float(
+                    config.get("scenario_significant_lsi_relative_threshold", 0.01)
+                ),
             )
             spatial = build_landscape_scenario_geojson(self.spatial_dataset.original, scenario)
             payload = {
@@ -533,7 +558,7 @@ class DemoWorkspace:
                     "connection_counts": scenario["connection_counts"],
                     "overall_grade": scenario["overall_grade"],
                     "overall_label": scenario["overall_label"],
-                    "note": f"组合情景先将所选地块整体作用于完整现状城镇开发边界，再对{adjacency_tolerance_m:g}米内的相邻面逐对执行局部闭合验证；六项指标和组合拓扑共同使用验证后的规划评价几何，并允许候选地块形成有效连接链。",
+                    "note": f"组合情景先将所选地块整体作用于完整现状城镇开发边界，再对{adjacency_tolerance_m:g}米内的相邻面逐对执行局部闭合验证；组合专用阈值为NP相对变化1%以下稳定、5%以上明显，LPI变化0.05个百分点以下稳定、0.5个百分点以上明显，LSI相对变化0.2%以下稳定、1%以上明显；综合等级使用NP、LPI、LSI，PD、ED、AI仅作辅助观测；组合拓扑使用同一规划评价几何，并允许候选地块形成有效连接链。",
                 },
                 "scenario": scenario,
                 "spatial": spatial,

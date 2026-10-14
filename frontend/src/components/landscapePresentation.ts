@@ -2,10 +2,13 @@ import type { LandscapeResult } from "../types";
 
 export const LANDSCAPE_METRICS = [
   { key: "NP", direction: "↓" },
-  { key: "PD", direction: "↓" },
   { key: "LPI", direction: "↑" },
-  { key: "ED", direction: "↓" },
   { key: "LSI", direction: "↓" },
+] as const;
+
+export const AUXILIARY_LANDSCAPE_METRICS = [
+  { key: "PD", direction: "↓" },
+  { key: "ED", direction: "↓" },
   { key: "AI", direction: "↑" },
 ] as const;
 

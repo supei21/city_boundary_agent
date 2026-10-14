@@ -37,7 +37,7 @@ export function LandscapeTable({ evaluation }: { evaluation: LandscapeEvaluation
               {LANDSCAPE_METRICS.map((metric) => (
                 <th key={metric.key}>{metric.key}{metric.direction}</th>
               ))}
-              <th>三个维度</th>
+              <th>三个核心维度</th>
               <th>调入关系</th>
               <th>拓扑检查</th>
               <th>评价结论</th>
@@ -85,7 +85,7 @@ export function LandscapeTable({ evaluation }: { evaluation: LandscapeEvaluation
           </tbody>
         </table>
       </div>
-      <p className="landscape-table-note">单地块稳定区间：PD相对变化＜0.005%，AI变化＜0.001个百分点；NP、LPI、ED、LSI沿用原标准，六项指标及三个维度的综合评价方式保持不变。</p>
+      <p className="landscape-table-note">综合等级使用NP、LPI、LSI三个核心指标：单个轻微变化视为局部波动，三项得分净和达到±2或出现未被反向明显变化抵消的单项明显变化时判为轻微影响；PD、ED、AI仅作辅助观测，拓扑风险独立显示。</p>
     </div>
   );
 }

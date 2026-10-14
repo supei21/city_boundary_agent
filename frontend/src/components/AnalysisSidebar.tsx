@@ -199,7 +199,7 @@ export function AnalysisSidebar({
 
               {isOpen && item.key === "landscape" && (
                 <div className="directory-body">
-                  <p className="analysis-note">比较候选地块调入或调出前后的六项景观指数，汇总连续完整性、破碎聚合性和边界规整性，并检查孤岛或分裂风险。</p>
+                  <p className="analysis-note">比较候选地块调入或调出前后的完整开发边界，以NP、LPI、LSI评价破碎程度、连续完整性和边界规整性，并独立检查孤岛或分裂风险。</p>
 
                   <section className="analysis-card">
                     <h3>基准边界</h3>
@@ -217,9 +217,10 @@ export function AnalysisSidebar({
                   <section className="analysis-card">
                     <h3>三个评价维度</h3>
                     <div className="metric-list">
-                      <div><span>连续完整性</span><strong>NP↓ · LPI↑</strong></div>
-                      <div><span>破碎聚合性</span><strong>PD↓ · AI↑</strong></div>
-                      <div><span>边界规整性</span><strong>ED↓ · LSI↓</strong></div>
+                      <div><span>连续完整性</span><strong>LPI↑</strong></div>
+                      <div><span>破碎程度</span><strong>NP↓</strong></div>
+                      <div><span>边界规整性</span><strong>LSI↓</strong></div>
+                      <div><span>辅助观测</span><strong>PD · ED · AI</strong></div>
                       <div><span>拓扑规则</span><strong>调入孤岛 · 调出分裂</strong></div>
                     </div>
                   </section>

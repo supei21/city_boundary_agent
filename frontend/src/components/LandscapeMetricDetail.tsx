@@ -1,5 +1,6 @@
 import type { LandscapeResult } from "../types";
 import {
+  AUXILIARY_LANDSCAPE_METRICS,
   formatLandscapeMetric,
   LANDSCAPE_METRICS,
   landscapeAssessmentLabel,
@@ -27,6 +28,26 @@ export function LandscapeMetricDetail({ result }: { result: LandscapeResult }) {
         </thead>
         <tbody>
           {LANDSCAPE_METRICS.map((metric) => {
+            const state = landscapeMetricState(result, metric.key);
+            const delta = result.delta[metric.key];
+            return (
+              <tr className={state} key={metric.key}>
+                <th>{metric.key}{metric.direction}</th>
+                <td>{formatLandscapeMetric(result.before[metric.key])}</td>
+                <td>{formatLandscapeMetric(result.after[metric.key])}</td>
+                <td>{delta > 0 ? "+" : ""}{formatLandscapeMetric(delta)}</td>
+                <td>{landscapeAssessmentLabel(result.metric_assessments[metric.key])}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+
+      <p className="landscape-table-note">辅助观测（不参与综合等级）</p>
+      <table aria-label={`${result.block_id}辅助景观指数`} className="map-landscape-metrics">
+        <thead><tr><th>指标</th><th>调整前</th><th>调整后</th><th>变化量</th><th>判断</th></tr></thead>
+        <tbody>
+          {AUXILIARY_LANDSCAPE_METRICS.map((metric) => {
             const state = landscapeMetricState(result, metric.key);
             const delta = result.delta[metric.key];
             return (
